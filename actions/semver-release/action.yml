@@ -6,9 +6,10 @@ description: >
   RELEASE_BOT_PAT — a GITHUB_TOKEN-pushed tag never triggers release.yml, the
   credential is the cascade mechanism (bin/push-release.sh refuses to run
   without it) — then mint the GitHub release. Caller duties: checkout with
-  fetch-depth: 0; the job MUST sit behind a PROTECTED `release` environment
-  (an unprotected environment FAILS OPEN: every merge would fire every
-  unapproved bump job); pass with: {bump: patch|minor|major,
+  fetch-depth: 0; the job MUST sit behind its OWN PROTECTED environment
+  (release-patch|minor|major — an environment approval releases EVERY job
+  waiting on it, so one shared env makes one click approve all three bumps;
+  an unprotected env fails open); pass with: {bump: patch|minor|major,
   release-bot-pat: secrets.RELEASE_BOT_PAT}. Version surfaces as
   needs.<job>.outputs.version. Zero third-party actions.
 inputs:
