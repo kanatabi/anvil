@@ -1,0 +1,31 @@
+name: deploy-bump
+description: >
+  Open (or reuse) the vortex deploy-bump PR pinning an ALREADY-PUSHED image
+  tag — bin/set-image-pr.sh is the only mechanism that moves a deployed
+  version. kanatabi/vortex is PRIVATE, so the clone rides VORTEX_BOT_PAT;
+  the token is passed through env and never logged. Release-only doctrine:
+  pass the vX.Y.Z tag, never an alias.
+inputs:
+  app:
+    description: short image name (lumen|earendil|mellon) — also the vortex dir
+    required: true
+  tag:
+    description: image tag to pin (MUST be vMAJOR.MINOR.PATCH for deployments)
+    required: true
+  vortex-bot-pat:
+    description: the VORTEX_BOT_PAT secret, passed through — never logged
+    default: ""
+runs:
+  using: composite
+  steps:
+    - name: bump PR
+      shell: bash
+      env:
+        VORTEX_BOT_PAT: ${{ inputs.vortex-bot-pat }}
+        APP: ${{ inputs.app }}
+        TAG: ${{ inputs.tag }}
+      run: |
+        bash "$GITHUB_ACTION_PATH/../../bin/set-image-pr.sh" \
+          --app "$APP" \
+          --image "ghcr.io/${GITHUB_REPOSITORY_OWNER}/${APP}" \
+          --tag "$TAG"

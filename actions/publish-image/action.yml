@@ -1,0 +1,55 @@
+name: publish-image
+description: >
+  Build this repo's container image and push ghcr.io/<owner>/<app>:<tag>,
+  plus an optional alias tag (:latest is for tests/tooling ONLY — deploy pins
+  are v-tags). Raw docker + the workflow token, zero third-party actions;
+  nothing secret is echoed (login rides --password-stdin).
+inputs:
+  app:
+    description: short image name (lumen|earendil|mellon) — also the ghcr image suffix
+    required: true
+  context:
+    description: docker build context
+    default: "."
+  tag:
+    description: image tag to publish (release flow — vMAJOR.MINOR.PATCH)
+    required: true
+  version-arg:
+    description: value passed to the Dockerfile ARG VERSION (Go builds stamp it)
+    default: ""
+  alias:
+    description: second tag to push for the same image — empty string disables
+    default: "latest"
+runs:
+  using: composite
+  steps:
+    - name: login to GHCR with the workflow token
+      shell: bash
+      run: |
+        echo "${{ github.token }}" | docker login ghcr.io -u "${GITHUB_ACTOR}" --password-stdin
+    - name: build
+      shell: bash
+      env:
+        APP: ${{ inputs.app }}
+        CONTEXT: ${{ inputs.context }}
+        TAG: ${{ inputs.tag }}
+        VERSION_ARG: ${{ inputs.version-arg }}
+      run: |
+        ARGS=()
+        [ -n "$VERSION_ARG" ] && ARGS+=(--build-arg VERSION="$VERSION_ARG")
+        docker build "${ARGS[@]}" \
+          -t "ghcr.io/${GITHUB_REPOSITORY_OWNER}/${APP}:${TAG}" \
+          "$CONTEXT"
+    - name: push
+      shell: bash
+      env:
+        APP: ${{ inputs.app }}
+        TAG: ${{ inputs.tag }}
+        ALIAS: ${{ inputs.alias }}
+      run: |
+        IMAGE="ghcr.io/${GITHUB_REPOSITORY_OWNER}/${APP}:${TAG}"
+        docker push "$IMAGE"
+        if [ -n "$ALIAS" ]; then
+          docker tag "$IMAGE" "ghcr.io/${GITHUB_REPOSITORY_OWNER}/${APP}:${ALIAS}"
+          docker push "ghcr.io/${GITHUB_REPOSITORY_OWNER}/${APP}:${ALIAS}"
+        fi
