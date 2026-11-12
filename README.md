@@ -76,12 +76,17 @@ only deployable artifact:
 
 ```
 merge to main → ci.yml: gates (+ contract on earendil)
-  → THREE waiting jobs on the PROTECTED `release` environment:
-      semver-patch | semver-minor | semver-major
-    the human reviews the run and approves EXACTLY ONE (declines the other
-    two; un-touched ones expire at 24h). Approving a job IS the release
-    decision — the bump level is the literal `with: bump:` of that job, no
-    derivation, full human control.
+  → THREE waiting jobs, EACH on its OWN PROTECTED environment:
+      semver-patch [release-patch] | semver-minor [release-minor]
+      | semver-major [release-major]
+    the human reviews the run and approves ONE job — approving IS the
+    release decision — the bump level is the literal `with: bump:` of that
+    job, no derivation, full human control. ONE ENVIRONMENT PER BUMP JOB IS
+    LOAD-BEARING: an environment approval releases EVERY job waiting on that
+    environment in the run (proven live 2026-11-13: one approval of a shared
+    `release` env pushed v0.1.0 AND v1.0.0, the patch job dying red on the
+    duplicate-tag guard). Job-per-environment makes the review card == the
+    choice. Un-approved bump jobs simply expire at 24h.
   → anvil semver-release: fetch --tags → next-version.sh → annotated tag
     → push via RELEASE_BOT_PAT (bin/push-release.sh — REFUSES with the
     default token: GITHUB_TOKEN-created events never cascade, so a
@@ -96,16 +101,20 @@ merge to main → ci.yml: gates (+ contract on earendil)
     design (or re-dispatch release.yml with an older tag: redeploy = release)
 ```
 
-**The fail-open trap, in permanent ink:** a job referencing an environment
-that does not exist gets it auto-created UNPROTECTED — the job then runs
-without waiting, and every merge fires all three bump jobs (three tags,
-three deploys). The `release` environment MUST exist with required reviewers
-before these workflows land on main, and the first merge after landing gets
-WATCHED: three amber "Waiting" badges or it's broken.
+**Two fail-open traps, in permanent ink:**
+1. A job referencing an environment that does not exist gets it auto-created
+   UNPROTECTED — the job then runs without waiting, and every merge fires
+   every bump job. Environment protection MUST predate the workflows.
+2. A fine-grained PAT WITHOUT the `Workflow` permission pushes refs that
+   NEVER trigger workflows — the tag lands, looks green, and the deploy
+   pipeline silently doesn't exist. Proven live 2026-11-13. RELEASE_BOT_PAT
+   needs Contents:RW **and** Workflow:RW. (GitHub also hides the other repos
+   behind 404s — see the checkout lesson.)
 
-**Double-approve = double-release:** two approvals push two valid tags and
-two bump PRs; nothing corrupts (immutable tags, last merge wins the deploy),
-but the habit is approve-one, decline-two.
+**Double-approve = double-release:** approving two bump jobs (two different
+environments) pushes two valid tags and two bump PRs; nothing corrupts
+(immutable tags, the duplicate guard turns a same-version race red, last
+merge wins the deploy), but the habit is one card, one click.
 
 Tag doctrine:
 
@@ -140,13 +149,15 @@ the default `GITHUB_TOKEN`.
 - `VORTEX_BOT_PAT` — fine-grained PAT (`vortex-bot-ci`): contents +
   pull-requests write, scoped to `kanatabi/vortex` ONLY. 90-day expiry; a
   lapsed token surfaces as 401/403 on the bump step and nothing else breaks.
-- `RELEASE_BOT_PAT` — fine-grained PAT, Contents:RW on lumen/earendil/mellon
-  ONLY (not vortex — compartmentalized from the bump hand). Pushes release
-  tags so the cascade fires; push-release.sh refuses without it. 90-day
-  expiry: an approved bump job dies at the push with 403 — the last step,
-  the reddest, never a half-release. Revocation = the emergency brake on
-  all releasing. Caveat as old as fine-grained PATs: it acts as its owner
-  account.
+- `RELEASE_BOT_PAT` — fine-grained PAT, Contents:RW **and Workflow:RW** on
+  lumen/earendil/mellon ONLY (not vortex — compartmentalized from the bump
+  hand). Pushes release tags so the cascade fires; push-release.sh refuses
+  without it. Workflow: is not optional: without it the PAT's pushes never
+  trigger workflows (the 2026-11-13 incident — tags lived, release.yml
+  never ran). 90-day expiry: an approved bump job dies at the push with 403
+  — the last step, the reddest, never a half-release. Revocation = the
+  emergency brake on all releasing. Caveat as old as fine-grained PATs: it
+  acts as its owner account.
 - `DEPLOY_AUTOMERGE` — repo or org VARIABLE, `on|off`, absent = off.
 
 ## Local testing
