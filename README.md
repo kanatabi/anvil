@@ -27,6 +27,10 @@ bin/
   diff-render.sh      renders every dir at two refs, emits a unified diff of
                       the RENDERED manifests — what Argo will apply, not the
                       YAML you wrote.
+  push-release.sh     the cascade key: push refs/tags/vX.Y.Z with
+                      RELEASE_BOT_PAT (a GITHUB_TOKEN-pushed tag never
+                      triggers a workflow — the silent no-deploy trap), then
+                      gh release create. Refuses to run without the PAT.
   set-image-pr.sh     the bump flow: clone vortex (PAT — it is PRIVATE),
                       kustomize edit set image, branch bump/<app>-<tag>,
                       PR `deploy: bump …` labelled deploy-bump; dedupes
@@ -39,10 +43,11 @@ bin/
                       (absent means off — fail-safe).
 actions/
   validate-manifests/ installs pinned helm (v3.22.1) then runs the scripts
-  semver-release/     bin/next-version.sh → annotated tag → push → gh release.
-                      `with: bump:` in, `version` out (outputs: value wired
-                      to the compute step — read it as
-                      needs.<job>.outputs.version).
+  semver-release/     the approval-gated release job: fetch --tags →
+                      bin/next-version.sh → annotated tag → push-release.sh
+                      (PAT cascade) → gh release. `with: bump:` in,
+                      `version` out (outputs: value wired to the compute
+                      step — read it as needs.<job>.outputs.version).
   publish-image/      build → push ghcr.io/<owner>/<app>:<tag> (+ optional
                       alias tag; :latest is for tests/tooling, deploys pin
                       v-tags). Raw docker + the workflow token.
@@ -63,23 +68,44 @@ Renovate-style auto-bumps of these refs are a hard NO (the renovate lesson):
 anvil changes are deploy-capable code, reviewed as such. To upgrade a
 consumer, bump the SHA in a PR a human merges.
 
-## The release contract (end-to-end) — release-only deploys
+## The release contract (end-to-end) — approval-gated, release-only deploys
 
-Nothing deploys from branch pushes anymore. The human gate did not move — it
-became the dispatch itself:
+Branch merges gate and NEVER deploy. A release exists only because a human
+approved one of three waiting bump jobs; the tag that approval pushes is the
+only deployable artifact:
 
 ```
-human dispatches release.yml (bump = patch|minor|major)
-  → semver-release: next-version.sh on the newest v-tag → vX.Y.Z;
-    annotated tag pushed; GitHub release created (job output: version)
-  → publish-image: ghcr.io/kanatabi/<app>:vX.Y.Z (+ :latest alias)
-  → deploy-bump → set-image-pr: bump branch + deploy-bump PR in vortex
-    (VORTEX_BOT_PAT — vortex is PRIVATE; see the checkout lesson below)
+merge to main → ci.yml: gates (+ contract on earendil)
+  → THREE waiting jobs on the PROTECTED `release` environment:
+      semver-patch | semver-minor | semver-major
+    the human reviews the run and approves EXACTLY ONE (declines the other
+    two; un-touched ones expire at 24h). Approving a job IS the release
+    decision — the bump level is the literal `with: bump:` of that job, no
+    derivation, full human control.
+  → anvil semver-release: fetch --tags → next-version.sh → annotated tag
+    → push via RELEASE_BOT_PAT (bin/push-release.sh — REFUSES with the
+    default token: GITHUB_TOKEN-created events never cascade, so a
+    "successful" tag would silently never deploy) → gh release create
+  → the tag push TRIGGERS release.yml (build → deploy):
+      publish-image: ghcr.io/kanatabi/<app>:vX.Y.Z (+ :latest alias)
+      deploy-bump → set-image-pr: bump branch + deploy-bump PR in vortex
   → vortex CI: validate-manifests + rendered diff
   → auto-merge ONLY if every guard holds AND DEPLOY_AUTOMERGE=on (absent = off)
   → Argo (targetRevision: HEAD) syncs within its poll interval
-  → rollback = git revert the bump commit — a human PR, human-merged, by design
+  → rollback = git revert the bump commit — a human PR, human-merged, by
+    design (or re-dispatch release.yml with an older tag: redeploy = release)
 ```
+
+**The fail-open trap, in permanent ink:** a job referencing an environment
+that does not exist gets it auto-created UNPROTECTED — the job then runs
+without waiting, and every merge fires all three bump jobs (three tags,
+three deploys). The `release` environment MUST exist with required reviewers
+before these workflows land on main, and the first merge after landing gets
+WATCHED: three amber "Waiting" badges or it's broken.
+
+**Double-approve = double-release:** two approvals push two valid tags and
+two bump PRs; nothing corrupts (immutable tags, last merge wins the deploy),
+but the habit is approve-one, decline-two.
 
 Tag doctrine:
 
@@ -114,12 +140,20 @@ the default `GITHUB_TOKEN`.
 - `VORTEX_BOT_PAT` — fine-grained PAT (`vortex-bot-ci`): contents +
   pull-requests write, scoped to `kanatabi/vortex` ONLY. 90-day expiry; a
   lapsed token surfaces as 401/403 on the bump step and nothing else breaks.
+- `RELEASE_BOT_PAT` — fine-grained PAT, Contents:RW on lumen/earendil/mellon
+  ONLY (not vortex — compartmentalized from the bump hand). Pushes release
+  tags so the cascade fires; push-release.sh refuses without it. 90-day
+  expiry: an approved bump job dies at the push with 403 — the last step,
+  the reddest, never a half-release. Revocation = the emergency brake on
+  all releasing. Caveat as old as fine-grained PATs: it acts as its owner
+  account.
 - `DEPLOY_AUTOMERGE` — repo or org VARIABLE, `on|off`, absent = off.
 
 ## Local testing
 
 ```
 bin/next-version.sh minor            # inside any repo: prints next vX.Y.Z
+DRY_RUN=1 GITHUB_REPOSITORY=kanatabi/lumen bin/push-release.sh v1.2.3
 bin/validate-all.sh <path-to-vortex> [--update]
 bin/diff-render.sh  <path-to-vortex> <base-ref>
 VORTX=<path-to-vortex> bin/set-image-pr.sh --app lumen \
