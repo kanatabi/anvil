@@ -1,18 +1,24 @@
 name: semver-release
 description: >
-  The release half of the machine: compute the next semver from the newest
-  v-tag (bin/next-version.sh), create an annotated tag, push it through the
-  https origin already authenticated by the caller's checkout, and open the
-  GitHub release with gh (default GH_TOKEN from the caller's permissions).
-  Zero third-party actions. Callers: `with: { bump: patch|minor|major }`,
-  read back `needs.<release-job>.outputs.version` — composite outputs surface
-  through the top-level outputs: mapping wired to the compute step's id.
-  Caller duties: checkout must carry tags (fetch-depth: 0), permissions
-  contents: write.
+  The release half of the machine, meant to run as an APPROVAL-GATED job in
+  the main pipeline: compute the next semver from the newest v-tag
+  (bin/next-version.sh), create an annotated tag, push it via
+  RELEASE_BOT_PAT — a GITHUB_TOKEN-pushed tag never triggers release.yml, the
+  credential is the cascade mechanism (bin/push-release.sh refuses to run
+  without it) — then mint the GitHub release. Caller duties: checkout with
+  fetch-depth: 0; the job MUST sit behind a PROTECTED `release` environment
+  (an unprotected environment FAILS OPEN: every merge would fire every
+  unapproved bump job); pass with: {bump: patch|minor|major,
+  release-bot-pat: secrets.RELEASE_BOT_PAT}. Version surfaces as
+  needs.<job>.outputs.version. Zero third-party actions.
 inputs:
   bump:
-    description: which semver segment to increment (patch|minor|major)
+    description: which semver segment to increment (patch|minor|major) — a
+      human chose it by approving THIS job
     required: true
+  release-bot-pat:
+    description: the RELEASE_BOT_PAT secret, passed through — never logged
+    default: ""
 outputs:
   version:
     description: the released tag (vMAJOR.MINOR.PATCH)
@@ -26,12 +32,13 @@ runs:
       env:
         BUMP: ${{ inputs.bump }}
       run: |
+        git fetch -q --tags origin || true   # a concurrent run may have released already
         NEXT=$(bash "$GITHUB_ACTION_PATH/../../bin/next-version.sh" "$BUMP") || {
           echo "semver-release: cannot compute a version from bump='$BUMP'" >&2
           exit 2
         }
         echo "version=$NEXT" >> "$GITHUB_OUTPUT"
-        echo "releasing $NEXT"
+        echo "approved release: $NEXT"
     - name: tag locally (annotated)
       shell: bash
       env:
@@ -39,14 +46,9 @@ runs:
       run: |
         git -c user.name="${GITHUB_ACTOR}" -c user.email="${GITHUB_ACTOR}@users.noreply.github.com" \
           tag -a "$NEXT" -m "release $NEXT"
-    - name: push tag
+    - name: push tag + release via PAT (the cascade key)
       shell: bash
       env:
         NEXT: ${{ steps.compute.outputs.version }}
-      run: git push origin "$NEXT"
-    - name: github release
-      shell: bash
-      env:
-        NEXT: ${{ steps.compute.outputs.version }}
-        GH_TOKEN: ${{ github.token }}
-      run: gh release create "$NEXT" --generate-notes --title "$NEXT"
+        RELEASE_BOT_PAT: ${{ inputs.release-bot-pat }}
+      run: bash "$GITHUB_ACTION_PATH/../../bin/push-release.sh" "$NEXT"
