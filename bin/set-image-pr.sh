@@ -4,7 +4,7 @@
 # `kustomize edit set image <app>=<image>:<tag>` in applications/<app>/.
 #
 #   usage: set-image-pr.sh --app lumen --image ghcr.io/kanatabi/lumen \
-#             --tag sha-abc1234 [--dry-run]
+#             --tag v1.5.0 [--dry-run]
 #   env:   VORTEX_BOT_PAT   fine-grained PAT scoped to kanatabi/vortex
 #          VORTX            override clone dir (tests)
 #
@@ -12,7 +12,7 @@
 # flow is testable offline except the push/PR itself.
 set -uo pipefail
 
-APP="" IMAGE="" TAG="" DRY="" REPO_URL="https://github.com/kanatabi/vortex.git"
+APP="" IMAGE="" TAG="" DRY=""
 while [ $# -gt 0 ]; do
   case "$1" in
     --app)   APP="$2"; shift 2 ;;
@@ -34,7 +34,10 @@ else
   [ -n "${VORTEX_BOT_PAT:-}" ] || { echo "VORTEX_BOT_PAT required"; exit 2; }
   command -v gh >/dev/null || { echo "gh required on the runner"; exit 2; }
   WORK=$(mktemp -d)/vortex
-  git clone -q "$REPO_URL" "$WORK"
+  # kanatabi/vortex is PRIVATE — an anonymous https clone answers 404 (GitHub
+  # hides existence). The clone rides the bot PAT; the URL embeds the secret,
+  # so keep -q and never echo it.
+  git clone -q "https://x-access-token:${VORTEX_BOT_PAT}@github.com/kanatabi/vortex.git" "$WORK"
   # dedupe: an open PR for this exact branch means "already proposed" — not an error
   if GH_TOKEN="$VORTEX_BOT_PAT" gh pr list --repo kanatabi/vortex --head "$BRANCH" --state open --json number \
        | grep -q '"number"'; then

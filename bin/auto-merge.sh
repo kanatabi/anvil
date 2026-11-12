@@ -40,6 +40,10 @@ while IFS= read -r line; do
       [[ "$body" =~ ^[[:space:]]*$ ]] && continue
       [[ "$body" =~ ^images:[[:space:]]* ]] && continue
       [[ "$body" =~ ^-[[:space:]]+(name|newName|newTag):[[:space:]]*[^[:space:]] ]] && continue
+      # canonical kustomize emits the continuation keys INDENTED, not as list
+      # items — newName/newTag exist only under images:, so these two names are
+      # still fence-safe (a `name:` key lives elsewhere too; it stays list-only)
+      [[ "$body" =~ ^[[:space:]]+(newName|newTag):[[:space:]]*[^[:space:]] ]] && continue
       [[ "$body" =~ ^[[:space:]]#.* ]] && continue   # comment changes allowed
       bail "line outside images: block: $body" ;;
   esac

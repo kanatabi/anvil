@@ -1,0 +1,52 @@
+name: semver-release
+description: >
+  The release half of the machine: compute the next semver from the newest
+  v-tag (bin/next-version.sh), create an annotated tag, push it through the
+  https origin already authenticated by the caller's checkout, and open the
+  GitHub release with gh (default GH_TOKEN from the caller's permissions).
+  Zero third-party actions. Callers: `with: { bump: patch|minor|major }`,
+  read back `needs.<release-job>.outputs.version` — composite outputs surface
+  through the top-level outputs: mapping wired to the compute step's id.
+  Caller duties: checkout must carry tags (fetch-depth: 0), permissions
+  contents: write.
+inputs:
+  bump:
+    description: which semver segment to increment (patch|minor|major)
+    required: true
+outputs:
+  version:
+    description: the released tag (vMAJOR.MINOR.PATCH)
+    value: ${{ steps.compute.outputs.version }}
+runs:
+  using: composite
+  steps:
+    - name: compute next version
+      id: compute
+      shell: bash
+      env:
+        BUMP: ${{ inputs.bump }}
+      run: |
+        NEXT=$(bash "$GITHUB_ACTION_PATH/../../bin/next-version.sh" "$BUMP") || {
+          echo "semver-release: cannot compute a version from bump='$BUMP'" >&2
+          exit 2
+        }
+        echo "version=$NEXT" >> "$GITHUB_OUTPUT"
+        echo "releasing $NEXT"
+    - name: tag locally (annotated)
+      shell: bash
+      env:
+        NEXT: ${{ steps.compute.outputs.version }}
+      run: |
+        git -c user.name="${GITHUB_ACTOR}" -c user.email="${GITHUB_ACTOR}@users.noreply.github.com" \
+          tag -a "$NEXT" -m "release $NEXT"
+    - name: push tag
+      shell: bash
+      env:
+        NEXT: ${{ steps.compute.outputs.version }}
+      run: git push origin "$NEXT"
+    - name: github release
+      shell: bash
+      env:
+        NEXT: ${{ steps.compute.outputs.version }}
+        GH_TOKEN: ${{ github.token }}
+      run: gh release create "$NEXT" --generate-notes --title "$NEXT"
