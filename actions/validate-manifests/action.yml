@@ -1,0 +1,23 @@
+name: validate-manifests
+description: >
+  Build every vortex kustomize dir, assert the kind-count table + config-shape
+  + migrate-hook invariants, and print the RENDERED diff against the base ref.
+inputs:
+  base-ref:
+    description: ref to diff against (rendered diff is informational; pass/fail is the table)
+    default: "origin/main"
+runs:
+  using: composite
+  steps:
+    - name: install pinned helm (v3.22.1 — the version our walkthrough proved)
+      shell: bash
+      run: |
+        command -v helm >/dev/null 2>&1 && exit 0
+        curl -sfL https://raw.githubusercontent.com/helm/helm/v3.22.1/scripts/get-helm-3 \
+          | sudo -E HELM_INSTALL_DIR=/usr/local/bin env PATH="$PATH" bash
+    - name: assertions
+      shell: bash
+      run: bash "$GITHUB_ACTION_PATH/../../bin/validate-all.sh" .
+    - name: rendered diff (summary)
+      shell: bash
+      run: bash "$GITHUB_ACTION_PATH/../../bin/diff-render.sh" . "${{ inputs.base-ref }}" >> "$GITHUB_STEP_SUMMARY"
