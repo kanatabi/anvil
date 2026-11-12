@@ -52,16 +52,22 @@ done < <(gh pr diff "$PR")
 # checks — EMPTY IS FATAL (fail-open fix, 2026-11-13): `labeled` fires the
 # moment the PR opens, before validate-manifests even exists as a check-run.
 # An empty list once meant "no required checks, proceed" — it also meant
-# "checks not yet created", i.e. merge blind. Now: poll briefly for the check
-# to APPEAR, and only SUCCESS satisfies; anything else hands the PR to humans.
-DEADLINE=$((SECONDS + 180))
-STATUSES=""
+# "checks not yet created", i.e. merge blind.
+# v2 (2026-11-13, pre-enable audit): the first fix broke EARLY — any non-empty
+# state (IN_PROGRESS!) exited the loop and then failed the SUCCESS test, so
+# the guard would have bailed on every PR forever. Now: poll until the check
+# reaches a TERMINAL state, only SUCCESS satisfies, anything else (or a
+# timeout with no terminal verdict) hands the PR to humans.
+DEADLINE=$((SECONDS + 600))
+FINAL=""
 while [ $SECONDS -lt $DEADLINE ]; do
   STATUSES=$(gh pr checks "$PR" --json name,state --jq '[.[] | select(.name=="validate-manifests") | .state] | @tsv' 2>/dev/null || echo "")
-  [ -n "$STATUSES" ] && break
-  sleep 10
+  case "$STATUSES" in
+    ""|*PENDING*|*QUEUED*|*IN_PROGRESS*) sleep 15 ;;
+    *) FINAL="$STATUSES"; break ;;
+  esac
 done
-{ [ -n "$STATUSES" ] && [[ "$STATUSES" == "SUCCESS" ]]; } || bail "validate-manifests not green (${STATUSES:-<never created>})"
+[ "$FINAL" = "SUCCESS" ] || bail "validate-manifests not green (${FINAL:-<no terminal verdict in 10min>})"
 
 # kill switch — repo variable, absent means OFF
 VAL=$(gh api "repos/${GITHUB_REPOSITORY:?}/actions/variables/DEPLOY_AUTOMERGE" --jq .value 2>/dev/null || echo "")
