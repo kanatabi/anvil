@@ -105,11 +105,16 @@ merge to main → ci.yml: gates (+ contract on earendil)
 1. A job referencing an environment that does not exist gets it auto-created
    UNPROTECTED — the job then runs without waiting, and every merge fires
    every bump job. Environment protection MUST predate the workflows.
-2. A fine-grained PAT WITHOUT the `Workflow` permission pushes refs that
-   NEVER trigger workflows — the tag lands, looks green, and the deploy
-   pipeline silently doesn't exist. Proven live 2026-11-13. RELEASE_BOT_PAT
-   needs Contents:RW **and** Workflow:RW. (GitHub also hides the other repos
-   behind 404s — see the checkout lesson.)
+ 2. A fine-grained PAT WITHOUT the `Workflow` permission pushes refs that
+    NEVER trigger workflows — the tag lands, looks green, and the deploy
+    pipeline silently doesn't exist. PROVEN via the events API: the
+    2026-11-13 incident's pushes produced ReleaseEvents but ZERO
+    PushEvents — GitHub never recorded the ref creation as an event at
+    all. RELEASE_BOT_PAT needs Contents:RW **and** Workflow:RW.
+    Separately: trigger filters use the documented GLOB syntax
+    (`v*.*.*`) — the regex-in-slashes form is not promised for
+    `on.push.tags` and we don't gamble on unverified filter syntax.
+    (GitHub also hides repos behind 404s — see the checkout lesson.)
 
 **Double-approve = double-release:** approving two bump jobs (two different
 environments) pushes two valid tags and two bump PRs; nothing corrupts
