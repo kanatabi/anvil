@@ -51,9 +51,15 @@ actions/
   publish-image/      build → push ghcr.io/<owner>/<app>:<tag> (+ optional
                       alias tag; :latest is for tests/tooling, deploys pin
                       v-tags). Raw docker + the workflow token.
-  deploy-bump/        bin/set-image-pr.sh for an already-pushed tag — the
-                      PR half, split from publishing so the deploy job can
-                      gate independently.
+  deploy-plan/        evidence-only rehearsal of the bump against REAL
+                    vortex main: pin pre-flight + full validation +
+                    exact diff, pushes NOTHING.
+  deploy-bump/      bin/set-image-pr.sh for an already-pushed tag — the
+                    PR half. Now validates the render BEFORE pushing
+                    (a bump PR whose manifests do not build is refused;
+                    --skip-validate emergency-only), so PRs arrive
+                    born-validated; deploy-plan above provides the
+                    evidence the human reads before approving.
                       Deliberately ZERO third-party actions everywhere, so
                       the pinning question is only ever about anvil itself.
 ```
@@ -91,10 +97,15 @@ merge to main → ci.yml: gates (+ contract on earendil)
     → push via RELEASE_BOT_PAT (bin/push-release.sh — REFUSES with the
     default token: GITHUB_TOKEN-created events never cascade, so a
     "successful" tag would silently never deploy) → gh release create
-  → the tag push TRIGGERS release.yml (build → deploy):
+  → the tag push TRIGGERS release.yml:
       publish-image: ghcr.io/kanatabi/<app>:vX.Y.Z (+ :latest alias)
-      deploy-bump → set-image-pr: bump branch + deploy-bump PR in vortex
-  → vortex CI: validate-manifests + rendered diff
+      deploy-plan (AUTOMATIC): rehearsal against real vortex main — prints
+        current-pin → proposed-pin + validated rendered diff, pushes nothing.
+        THIS is what the human reads.
+      deploy-open (PARKS on the PROTECTED `deploy` environment — one job,
+        one env, one card): approval opens the bump PR via set-image-pr,
+        which re-validates BEFORE pushing (born-validated PRs).
+  → vortex CI: validate-manifests + rendered diff (independent second opinion)
   → auto-merge ONLY if every guard holds AND DEPLOY_AUTOMERGE=on (absent = off)
   → Argo (targetRevision: HEAD) syncs within its poll interval
   → rollback = git revert the bump commit — a human PR, human-merged, by
@@ -176,3 +187,23 @@ VORTX=<path-to-vortex> bin/set-image-pr.sh --app lumen \
     --image ghcr.io/kanatabi/lumen --tag v9.9.9-test --dry-run
     # needs no token, pushes nothing — prepares the bump branch in a temp copy
 ```
+
+## Backlog — centralized repo settings (deferred by the owner 2026-11-13)
+
+Today every app repo needs manual GitHub settings: environments
+(`release-patch|minor|major`, `deploy`, required-reviewer), secrets
+(`VORTEX_BOT_PAT`, `RELEASE_BOT_PAT`), variables (`DEPLOY_AUTOMERGE` on
+vortex), required status checks. Root cause: `kanatabi` is a PERSONAL account
+— org environments/secrets/variables/rulesets exist only for organizations.
+
+Planned fix when picked up (Path 1): `provision/settings.yaml` (the per-repo
+truth: environment list, reviewers, secret NAMES only — never values) +
+`bin/provision-repo.sh` (idempotent REST apply: PUT environments, required
+checks, secret-presence AUDIT; the human pastes the 2 secret values, the
+script reports which). Needs one `estate-provision` fine-grained PAT
+(Administration+Environments+Secrets write, estate repos, laptop-only).
+Safety fact: REST-created environments are byte-identical to UI-created —
+no drift class introduced. Rejected at this scale: terraform-provider-github
+(plaintext secret values in state for a 5-repo problem); full org migration
+(Path 2 — clean but re-walks every URL, the ghcr namespace, and every pin;
+revisit only for a second maintainer or >10 repos).
