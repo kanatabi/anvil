@@ -1,0 +1,32 @@
+name: deploy-plan
+description: >
+  The EVIDENCE half of a deploy decision, automatic after build: applies the
+  image bump against the real vortex main state, runs the full manifest
+  validation, prints current-pin -> proposed-pin and the exact rendered diff —
+  and pushes NOTHING. A human reads this log (and the step summary) before
+  approving the deploy-open job. Needs the vortex-bot-pat for the PRIVATE
+  clone; the run never writes to vortex.
+inputs:
+  app:
+    description: short image name (lumen|earendil|mellon) — also the vortex dir
+    required: true
+  tag:
+    description: release tag being proposed (vX.Y.Z)
+    required: true
+  vortex-bot-pat:
+    description: the VORTEX_BOT_PAT secret, passed through — never logged
+    required: true
+runs:
+  using: composite
+  steps:
+    - name: plan the bump (no writes)
+      shell: bash
+      env:
+        VORTEX_BOT_PAT: ${{ inputs.vortex-bot-pat }}
+      run: |
+        set -o pipefail   # a failed plan must go RED through tee, not green
+        bash "$GITHUB_ACTION_PATH/../../bin/set-image-pr.sh" \
+          --app "${{ inputs.app }}" \
+          --image "ghcr.io/${GITHUB_REPOSITORY_OWNER}/${{ inputs.app }}" \
+          --tag "${{ inputs.tag }}" \
+          --plan | tee "$GITHUB_STEP_SUMMARY"

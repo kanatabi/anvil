@@ -49,9 +49,19 @@ while IFS= read -r line; do
   esac
 done < <(gh pr diff "$PR")
 
-# checks
-STATUSES=$(gh pr checks "$PR" --json name,state --jq '[.[] | select(.name=="validate-manifests") | .state] | @tsv' 2>/dev/null || echo "")
-{ [ -z "$STATUSES" ] || [[ "$STATUSES" == "SUCCESS" ]]; } || bail "validate-manifests not green ($STATUSES)"
+# checks — EMPTY IS FATAL (fail-open fix, 2026-11-13): `labeled` fires the
+# moment the PR opens, before validate-manifests even exists as a check-run.
+# An empty list once meant "no required checks, proceed" — it also meant
+# "checks not yet created", i.e. merge blind. Now: poll briefly for the check
+# to APPEAR, and only SUCCESS satisfies; anything else hands the PR to humans.
+DEADLINE=$((SECONDS + 180))
+STATUSES=""
+while [ $SECONDS -lt $DEADLINE ]; do
+  STATUSES=$(gh pr checks "$PR" --json name,state --jq '[.[] | select(.name=="validate-manifests") | .state] | @tsv' 2>/dev/null || echo "")
+  [ -n "$STATUSES" ] && break
+  sleep 10
+done
+{ [ -n "$STATUSES" ] && [[ "$STATUSES" == "SUCCESS" ]]; } || bail "validate-manifests not green (${STATUSES:-<never created>})"
 
 # kill switch — repo variable, absent means OFF
 VAL=$(gh api "repos/${GITHUB_REPOSITORY:?}/actions/variables/DEPLOY_AUTOMERGE" --jq .value 2>/dev/null || echo "")
