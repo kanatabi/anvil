@@ -1,17 +1,22 @@
 name: semver-release
 description: >
   The release half of the machine, meant to run as an APPROVAL-GATED job in
-  the main pipeline: compute the next semver from the newest v-tag
-  (bin/next-version.sh), create an annotated tag, push it via
-  RELEASE_BOT_PAT — a GITHUB_TOKEN-pushed tag never triggers release.yml, the
-  credential is the cascade mechanism (bin/push-release.sh refuses to run
-  without it) — then mint the GitHub release. Caller duties: checkout with
-  fetch-depth: 0; the job MUST sit behind its OWN PROTECTED environment
-  (release-patch|minor|major — an environment approval releases EVERY job
-  waiting on it, so one shared env makes one click approve all three bumps;
-  an unprotected env fails open); pass with: {bump: patch|minor|major,
-  release-bot-pat: secrets.RELEASE_BOT_PAT}. Version surfaces as
-  needs.<job>.outputs.version. Zero third-party actions.
+  the main pipeline: compute the next semver (vendored semver-tool for the
+  arithmetic, version-ordered reachable tags for the selection — NOT git
+  describe, whose date ordering is a live-fire bug class), refuse loudly if
+  the computed tag already exists anywhere, create an annotated tag, push it
+  via RELEASE_BOT_PAT — a GITHUB_TOKEN-pushed tag never triggers release.yml,
+  the credential is the cascade mechanism (bin/push-release.sh refuses to run
+  without it) — mint the GitHub release, then SETTLE: decline this run's
+  sibling bump reviews so the pipeline completes on the one click the human
+  already made (warn-only; fences allow release-patch|minor|major only,
+  never the current env, never `deploy`, never another run). Caller duties:
+  checkout with fetch-depth: 0; the job MUST sit behind its OWN PROTECTED
+  environment (release-patch|minor|major — an environment approval releases
+  EVERY job waiting on it; an unprotected env fails open); pass with:
+  {bump: patch|minor|major, release-bot-pat: secrets.RELEASE_BOT_PAT}.
+  Version surfaces as needs.<job>.outputs.version. Zero third-party actions;
+  the one vendored script carries pinned provenance in its header.
 inputs:
   bump:
     description: which semver segment to increment (patch|minor|major) — a
@@ -20,6 +25,9 @@ inputs:
   release-bot-pat:
     description: the RELEASE_BOT_PAT secret, passed through — never logged
     default: ""
+  settle:
+    description: decline sibling bump reviews after success (true|false)
+    default: "true"
 outputs:
   version:
     description: the released tag (vMAJOR.MINOR.PATCH)
@@ -27,17 +35,24 @@ outputs:
 runs:
   using: composite
   steps:
-    - name: compute next version
+    - name: compute next version (+ collision guard)
       id: compute
       shell: bash
       env:
         BUMP: ${{ inputs.bump }}
       run: |
-        git fetch -q --tags origin || true   # a concurrent run may have released already
+        git fetch -q --tags origin || true   # freshest tag truth (see selection note)
         NEXT=$(bash "$GITHUB_ACTION_PATH/../../bin/next-version.sh" "$BUMP") || {
           echo "semver-release: cannot compute a version from bump='$BUMP'" >&2
           exit 2
         }
+        if git tag -l "$NEXT" | grep -q . \
+           || git ls-remote --exit-code --tags origin "refs/tags/$NEXT" >/dev/null 2>&1; then
+          echo "semver-release: computed $NEXT but the tag ALREADY EXISTS (local or remote)." >&2
+          echo "  Refusing — someone tagged ahead of this pipeline, or the ordering changed." >&2
+          echo "  Audit: git tag --merged HEAD --list 'v*' | sort -V" >&2
+          exit 2
+        fi
         echo "version=$NEXT" >> "$GITHUB_OUTPUT"
         echo "approved release: $NEXT"
     - name: tag locally (annotated)
@@ -53,3 +68,10 @@ runs:
         NEXT: ${{ steps.compute.outputs.version }}
         RELEASE_BOT_PAT: ${{ inputs.release-bot-pat }}
       run: bash "$GITHUB_ACTION_PATH/../../bin/push-release.sh" "$NEXT"
+    - name: settle sibling bump reviews (warn-only)
+      if: inputs.settle == 'true'
+      shell: bash
+      env:
+        BUMP: ${{ inputs.bump }}
+        RELEASE_BOT_PAT: ${{ inputs.release-bot-pat }}
+      run: bash "$GITHUB_ACTION_PATH/../../bin/settle-pending-reviews.sh" "$BUMP"

@@ -14,10 +14,21 @@ their own repos — YAGNI is a feature.
 
 ```
 bin/
-  next-version.sh     semver arithmetic for the release flow: newest v-tag +
-                      patch|minor|major → next vX.Y.Z. No tags yet:
-                      major→v1.0.0, minor|patch→v0.1.0. --current prints the
-                      newest tag (or nothing). Garbage in → exit 2.
+  next-version.sh     semver truth: the reachable v-tag with the HIGHEST
+                      VERSION (sort -V, --merged HEAD — never git describe,
+                      whose equidistant tags sort by TAGGER DATE: a live-fire
+                      bug 2026-11-13) bumped by the VENDORED semver-tool
+                      (below). --current prints the max tag. No tags yet:
+                      major->v1.0.0, minor|patch->v0.1.0. Garbage in -> exit 2.
+  settle-pending-reviews.sh
+                      after a successful release, declines this run's sibling
+                      bump reviews (fence: release-patch|minor|major only,
+                      never the current env, never `deploy`, run-scoped) so
+                      ONE approval completes the pipeline. Auth rides
+                      RELEASE_BOT_PAT (owner acts as the configured reviewer;
+                      PAT needs Actions:RW). Warn-only by design: the release
+                      already happened — a red settle would lie. Fallback:
+                      decline the siblings by hand.
   validate-all.sh     kustomize build of every applications/ + overlays/ dir,
                       kind-count assertions (expected-kinds.txt), config-shape
                       assertions (zero inline config literals; envFrom present;
@@ -44,10 +55,11 @@ bin/
 actions/
   validate-manifests/ installs pinned helm (v3.22.1) then runs the scripts
   semver-release/     the approval-gated release job: fetch --tags →
-                      bin/next-version.sh → annotated tag → push-release.sh
-                      (PAT cascade) → gh release. `with: bump:` in,
-                      `version` out (outputs: value wired to the compute
-                      step — read it as needs.<job>.outputs.version).
+                      bin/next-version.sh (+ collision guard: refuses loudly
+                      if the computed tag exists locally OR on origin) →
+                      annotated tag → push-release.sh (PAT cascade) →
+                      gh release → settle (siblings auto-declined; opt-out
+                      `settle: false`). `with: bump:` in, `version` out.
   publish-image/      build → push ghcr.io/<owner>/<app>:<tag> (+ optional
                       alias tag; :latest is for tests/tooling, deploys pin
                       v-tags). Raw docker + the workflow token.
@@ -74,6 +86,18 @@ Renovate-style auto-bumps of these refs are a hard NO (the renovate lesson):
 anvil changes are deploy-capable code, reviewed as such. To upgrade a
 consumer, bump the SHA in a PR a human merges.
 
+## Vendored dependencies (the one exception to "write it here")
+
+`bin/vendor/semver` — **semver-tool 3.4.0** (commit `837ad91…`, Apache-2.0,
+license text beside it, sha256 in the file's provenance header). The rule:
+anvil runs zero third-party ACTIONS and fetches nothing at runtime; a
+third-party *algorithm* we'd otherwise invent (semver arithmetic — the
+prerelease rules are subtle and I would get them wrong, cf. `check` vs
+`validate`) is vendored PINNED, audited once, body byte-identical to
+upstream, upgrade = a deliberate PR re-verifying sha256+license. Doctrine
+selection (which tag is "newest") stays ours — the tool has no opinion
+about git, and `git describe`'s date ordering is a documented live-fire bug.
+
 ## The release contract (end-to-end) — approval-gated, release-only deploys
 
 Branch merges gate and NEVER deploy. A release exists only because a human
@@ -92,7 +116,10 @@ merge to main → ci.yml: gates (+ contract on earendil)
     environment in the run (proven live 2026-11-13: one approval of a shared
     `release` env pushed v0.1.0 AND v1.0.0, the patch job dying red on the
     duplicate-tag guard). Job-per-environment makes the review card == the
-    choice. Un-approved bump jobs simply expire at 24h.
+    choice. Un-approved siblings are DECLINED AUTOMATICALLY by the released
+    job (settle — warn-only, fence: release-* envs of THIS run only), so one
+    approval completes the pipeline and frees the ci concurrency queue; if
+    settle ever warns, decline by hand (else they expire at 24h).
   → anvil semver-release: fetch --tags → next-version.sh → annotated tag
     → push via RELEASE_BOT_PAT (bin/push-release.sh — REFUSES with the
     default token: GITHUB_TOKEN-created events never cascade, so a
@@ -121,7 +148,9 @@ merge to main → ci.yml: gates (+ contract on earendil)
     pipeline silently doesn't exist. PROVEN via the events API: the
     2026-11-13 incident's pushes produced ReleaseEvents but ZERO
     PushEvents — GitHub never recorded the ref creation as an event at
-    all. RELEASE_BOT_PAT needs Contents:RW **and** Workflow:RW.
+    all. RELEASE_BOT_PAT needs Contents:RW, Workflow:RW **and Actions:RW**
+    (Actions: is what lets the settle step post sibling-decline reviews —
+    the PAT acts as you, the configured reviewer).
     Separately: trigger filters use the documented GLOB syntax
     (`v*.*.*`) — the regex-in-slashes form is not promised for
     `on.push.tags` and we don't gamble on unverified filter syntax.
@@ -165,7 +194,8 @@ the default `GITHUB_TOKEN`.
 - `VORTEX_BOT_PAT` — fine-grained PAT (`vortex-bot-ci`): contents +
   pull-requests write, scoped to `kanatabi/vortex` ONLY. 90-day expiry; a
   lapsed token surfaces as 401/403 on the bump step and nothing else breaks.
-- `RELEASE_BOT_PAT` — fine-grained PAT, Contents:RW **and Workflow:RW** on
+- `RELEASE_BOT_PAT` — fine-grained PAT, Contents:RW + Workflow:RW +
+  Actions:RW on
   lumen/earendil/mellon ONLY (not vortex — compartmentalized from the bump
   hand). Pushes release tags so the cascade fires; push-release.sh refuses
   without it. Workflow: is not optional: without it the PAT's pushes never
