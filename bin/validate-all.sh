@@ -66,7 +66,7 @@ cd "$VORTEX"
 # sub-kustomizations are not in the validated set by contract, and the table
 # keys pin the exact dir names anyway (UNLISTED/MISSING catch drift).
 dirs=()
-for d in applications/*/ environments/*/*/ overlays/*/*/ apps/*/; do
+for d in bases/*/ environments/*/*/ overlays/*/*/ apps/*/; do
   [ -f "$d/kustomization.yaml" ] && dirs+=("$d")
 done
 # helm-free fast path when the ESO wrapper is not in scope? no — silence IS the

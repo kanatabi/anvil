@@ -17,7 +17,10 @@
 #      the epoch trio, and the same-env gate lockstep stanzas). TRANSITION
 #      (legacy-shaped branches only — delete together with the vortex
 #      env-model PR that removes the overlays/ tree): applications/<app>/
-#      kustomization.yaml (the old pin), overlays/production/<any>/
+#      kustomization.yaml (the old pin — STRANDED by the 2026-11-14 bases/
+#      rename: the path no longer exists, so the deprecated legacy bump
+#      grammar has nothing left to touch; kept for fence archaeology),
+#      overlays/production/<any>/
 #      kustomization.yaml (the old gate-image lockstep), and any *.yaml under
 #      overlays/production/<app-from-head-ref>/ (the old epoch pair).
 #   4. every changed LINE is fence-legal syntax: inside the images: block, or
@@ -78,7 +81,7 @@ while IFS= read -r f; do
   # production overlay). Delete with the overlays/ tree (vortex env-model
   # PR); until then these are the pre-restructure pin/lockstep/pair paths.
   [ -n "$LEGACY_BRANCH" ] || bail "path $f outside the fence for env '$PR_ENV'"
-  [[ "$f" =~ ^applications/[a-z0-9-]+/kustomization\.yaml$ ]] && continue
+  [[ "$f" =~ ^applications/[a-z0-9-]+/kustomization\.yaml$ ]] && continue # legacy pin path, stranded by the bases/ rename (grammar deprecated)
   [[ "$f" =~ ^overlays/production/[a-z0-9-]+/kustomization\.yaml$ ]] && continue
   [[ "$f" =~ ^overlays/production/${PR_APP}/.*\.yaml$ ]] && continue
   bail "path $f outside the fence"
