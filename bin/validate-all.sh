@@ -89,7 +89,7 @@ while IFS=$'\t' read -r d want; do
 done < "$TABLE"
 
 # raw Application CRs (apps/, bootstrap/) are not kustomize dirs — parse-check
-for f in apps/*.yaml apps/single-node/*.yaml bootstrap/*.yaml; do
+for f in apps/*.yaml apps/single-node/*.yaml apps/production/*.yaml bootstrap/*.yaml; do
   [ -f "$f" ] || continue
   if command -v js-yaml >/dev/null 2>&1; then js-yaml "$f" >/dev/null 2>&1 || { echo "PARSE $f"; fail=1; }
   elif command -v npx >/dev/null 2>&1; then npx --yes js-yaml "$f" >/dev/null 2>&1 || { echo "PARSE $f"; fail=1; }
