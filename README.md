@@ -307,6 +307,12 @@ merely fence-convenient.
 > sibling manifest PRs are mid-flight, do NOT one-shot `--update` — it
 > would freeze a transient reality; regenerate against the converged main
 > and ship the refresh in its own reviewed commit.
+>
+> 2026-11-14 (ingress retirement): `applications/earendil` + `applications/mellon`
+> rows 4→3 — the bases lost their Ingress (each env overlay authors its own
+> ingress.yaml now; env-overlay rows stay 8 — the Ingress moved between
+> layers, not in or out). Commit pairs with the vortex refactor PR, which
+> must bump the validate-manifests ref to this SHA in the same PR.
 
 ### The 404 lesson: cross-repo checkout of a repo you can't see
 
