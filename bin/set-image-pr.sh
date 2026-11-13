@@ -1,12 +1,18 @@
 #!/usr/bin/env bash
 # set-image-pr.sh — the ONLY mechanism that moves a deployed version.
 # Opens (or reuses) a bump PR in vortex that does exactly one thing: pin
-# `kustomize edit set image <app>=<image>:<tag>` in applications/<app>/ —
-# plus, when asked, the epoch PAIR and the gate-image lockstep (below).
+# `kustomize edit set image <app>=<image>:<tag>` in
+# environments/<env>/<app>/ — plus, when asked, the epoch TRIO and the
+# same-env lockstep (below).
 #
 #   usage: set-image-pr.sh --app lumen --image ghcr.io/kanatabi/lumen \
-#             --tag v1.5.0 [--config-epoch N] [--dry-run] [--plan] [--skip-validate]
+#             --tag v1.5.0 [--env production] [--config-epoch N] \
+#             [--dry-run] [--plan] [--skip-validate]
 #
+#   --env E    target environment ∈ foundation|staging|production (default
+#              production). Selects the dir the pin + trio live in and the
+#              branch grammar; the script never enumerates envs beyond this
+#              validation and the ${ENV} interpolation.
 #   --dry-run  offline rehearsal on a LOCAL vortex copy (VORTX=<path>), no token
 #   --plan     the evidence half of the deploy decision: apply the bump against
 #              the REAL remote main state, validate the render, print
@@ -16,18 +22,21 @@
 #              Validation failure refuses to push (--skip-validate to override,
 #              emergency only — a bump PR that cannot render is a lie).
 #   --config-epoch N
-#              flip the EPOCH PAIR in the same commit: every
-#              `omicron/config.epoch: "…"` annotation and every gate
-#              `--declared` arg under overlays/production/<app>/ becomes N
-#              (validate-all's class-4 rule asserts the pair stays EQUAL —
-#              a bump that flips only one side is refused before the PR
-#              opens). Plus the LOCKSTEP that rides EVERY bump regardless:
-#              any `name: <app>` images stanza in ANY overlays/production/*
-#              dir (the config-gate pins living in other apps' overlays)
+#              flip the EPOCH TRIO in the same commit: the pod-template
+#              `omicron/config.epoch: "…"` annotation, the gate
+#              `--declared` arg, AND the ExternalSecret metadata
+#              `omicron/config.epoch: "…"` annotation under
+#              environments/<env>/<app>/ all become N (validate-all's
+#              class-4 rule asserts the trio stays EQUAL — a bump that
+#              flips less than all three is refused before the PR opens).
+#              Plus the LOCKSTEP that rides EVERY bump: any `name: <app>`
+#              images stanza in ANY environments/<env>/* dir (the config-gate
+#              pins living in the SAME env's other overlays — bumping lumen
+#              is the canonical case: every gate decodes epochs with it)
 #              moves to the same TAG — a gate decoding epochs with a stale
 #              image is how drift starts. All edits are generic line rules
-#              parameterized on --app/--tag/--config-epoch: this shared
-#              script holds ZERO estate app names.
+#              parameterized on --app/--env/--tag/--config-epoch: this shared
+#              script holds ZERO estate app names and NO env list.
 #
 #   env: VORTEX_BOT_PAT  fine-grained PAT scoped to kanatabi/vortex (clone is
 #        PAT-authenticated because the push and the PR need the credentials
@@ -36,12 +45,13 @@
 #        VORTX           local clone path for --dry-run (and offline --plan tests)
 set -uo pipefail
 
-APP="" IMAGE="" TAG="" DRY="" PLAN="" SKIP_VALIDATE="" EPOCH=""
+APP="" IMAGE="" TAG="" DRY="" PLAN="" SKIP_VALIDATE="" EPOCH="" ENV="production"
 while [ $# -gt 0 ]; do
   case "$1" in
     --app)   APP="$2"; shift 2 ;;
     --image) IMAGE="$2"; shift 2 ;;
     --tag)   TAG="$2"; shift 2 ;;
+    --env)   ENV="$2"; shift 2 ;;
     --config-epoch) EPOCH="$2"; shift 2 ;;
     --dry-run) DRY=1; shift ;;
     --plan)  PLAN=1; shift ;;
@@ -50,9 +60,13 @@ while [ $# -gt 0 ]; do
   esac
 done
 [ -n "$APP" ] && [ -n "$IMAGE" ] && [ -n "$TAG" ] || { echo "need --app --image --tag"; exit 2; }
+case "$ENV" in
+  foundation|staging|production) ;;
+  *) echo "--env must be foundation|staging|production, got: $ENV"; exit 2 ;;
+esac
 [[ "$EPOCH" =~ ^[0-9]+$ ]] || { [ -z "$EPOCH" ] || { echo "--config-epoch must be a non-negative integer, got: $EPOCH"; exit 2; }; }
-BRANCH="bump/${APP}-${TAG}"
-TARGET="applications/${APP}"
+BRANCH="bump/${APP}-${ENV}-${TAG}"
+TARGET="environments/${ENV}/${APP}"
 ANVIL_BIN=$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)
 
 if [ -n "$DRY" ] || { [ -n "$PLAN" ] && [ -n "${VORTX:-}" ]; }; then
@@ -75,13 +89,13 @@ fi
 
 cd "$WORK"
 git checkout -q -b "$BRANCH" "origin/main" 2>/dev/null || git checkout -q -b "$BRANCH" main
-test -d "$TARGET" || { echo "no $TARGET in vortex — wrong app name?"; exit 1; }
+test -d "$TARGET" || { echo "no $TARGET in vortex — wrong app or env name?"; exit 1; }
 
 echo "==== pin pre-flight ===="
-echo "current pin in vortex main:"
+echo "current pin in vortex main ($TARGET):"
 git show "HEAD:$TARGET/kustomization.yaml" | sed -n '/^images:/,/^[^ ]/p' | sed 's/^/    /'
-echo "proposed: ${APP} -> ${IMAGE}:${TAG}"
-[ -n "$EPOCH" ] && echo "epoch pair: overlays/production/${APP}/ -> $EPOCH (annotation + --declared)"
+echo "proposed: ${APP} -> ${IMAGE}:${TAG} (env: ${ENV})"
+[ -n "$EPOCH" ] && echo "epoch trio: $TARGET/ -> $EPOCH (pod annotation + --declared + ES annotation)"
 echo "=========================="
 
 cd "$TARGET"
@@ -89,12 +103,19 @@ command -v kustomize >/dev/null || { echo "kustomize binary required (runners sh
 kustomize edit set image "${APP}=${IMAGE}:${TAG}" || { echo "kustomize edit FAILED"; exit 1; }
 cd "$WORK"
 
-# ---- gate-image LOCKSTEP (rides EVERY bump): any `name: ${APP}` images
-# stanza in ANY overlays/production/* dir moves to ${TAG} in this same
-# commit. The config-gate pins live in OTHER apps' overlays; a gate running
-# a stale binary decays epochs silently, so three pins travel as one.
-# Generic adjacency rule — no estate app names in this script, only ${APP}.
-for kf in overlays/production/*/kustomization.yaml; do
+# ---- app-image LOCKSTEP (rides EVERY bump): every `name: ${APP}` images
+# stanza in the bump env's overlay dirs moves to ${TAG} in this same commit.
+# The config-gate pins live in OTHER apps' overlays of the SAME env — bumping
+# lumen is the canonical case (every env's gate ships in the lumen image and
+# a gate decoding epochs with a stale binary is how drift starts), so the
+# pins travel as one. Scoping to ${ENV} keeps the PR inside what auto-merge's
+# env path fence admits: a production bump never re-pins staging. Generic
+# adjacency rule — no estate app names in this script, only ${APP}; no env
+# list, only the ${ENV} from --env.
+#   overlays/${ENV}/* is TRANSITION (the same lockstep walk on the legacy
+#   tree) — drop with the tree when the vortex env-model PR lands.
+for kf in environments/"${ENV}"/*/kustomization.yaml \
+          overlays/"${ENV}"/*/kustomization.yaml; do
   [ -f "$kf" ] || continue
   awk -v app="$APP" -v tag="$TAG" '
     /^[[:space:]]*-[[:space:]]*name:/ {
@@ -109,21 +130,40 @@ for kf in overlays/production/*/kustomization.yaml; do
   ' "$kf" > "$kf.anvil" && mv "$kf.anvil" "$kf"
 done
 
-# ---- EPOCH PAIR flip (--config-epoch): annotation AND --declared together,
-# or not at all. Both sides pre-must exist — flipping one line of a pair that
-# isn't there is the half-bump this whole mechanism exists to prevent. ----
+# ---- EPOCH TRIO flip (--config-epoch): pod annotation AND --declared AND
+# ExternalSecret annotation together, or not at all. All three pre-must
+# exist — flipping part of a trio that isn't there is the half-bump this
+# whole mechanism exists to prevent. ----
 if [ -n "$EPOCH" ]; then
-  EDIR="overlays/production/${APP}"
-  ann=$(grep -h 'omicron/config.epoch' "$EDIR"/*.yaml 2>/dev/null | grep -c '[0-9]' || true)
-  dec=$(grep -h -- '--declared' "$EDIR"/*.yaml 2>/dev/null | wc -l || true)
-  if [ "${ann:-0}" -eq 0 ] || [ "${dec:-0}" -eq 0 ]; then
-    echo "--config-epoch $EPOCH requested, but $EDIR/ has annotation-lines=$ann declared-lines=$dec — the PAIR must exist before it can be flipped; refusing" >&2
-    exit 1
-  fi
-  echo "---- epoch pair: $ann annotation + $dec declared line(s) -> $EPOCH ----"
+  EDIR="$TARGET"
+  # The three sides are counted BY FILE KIND in the raw overlay, mirroring
+  # validate-all's BY-DOCUMENT-KIND extraction over the render: a file that
+  # declares `kind: ExternalSecret` carries the ES side; the pod side rides
+  # the kustomization patches; --declared is the gate arg.
+  es_files=$(grep -l 'kind:[[:space:]]*ExternalSecret' "$EDIR"/*.yaml 2>/dev/null || true)
+  pod_ann=0 es_ann=0
   for f in "$EDIR"/*.yaml; do
     [ -f "$f" ] || continue
-    # (a) annotation side — quoted value is the k8s norm; bare digits tolerated
+    n=$(grep 'omicron/config.epoch' "$f" 2>/dev/null | grep -c '[0-9]' || true)
+    if [ -n "$es_files" ] && printf '%s\n' "$es_files" | grep -qxF -- "$f"; then
+      es_ann=$((es_ann + n))
+    else
+      pod_ann=$((pod_ann + n))
+    fi
+  done
+  dec=$(grep -h -- '--declared' "$EDIR"/*.yaml 2>/dev/null | grep -c '[0-9]' || true)
+  if [ "${pod_ann:-0}" -eq 0 ] || [ "${es_ann:-0}" -eq 0 ] || [ "${dec:-0}" -eq 0 ]; then
+    echo "--config-epoch $EPOCH requested, but $EDIR/ is not a complete TRIO: pod-annotations=$pod_ann es-annotations=$es_ann declared-lines=$dec — all three must exist before they can be flipped; refusing" >&2
+    exit 1
+  fi
+  echo "---- epoch trio: $pod_ann pod + $dec declared + $es_ann ES line(s) -> $EPOCH ----"
+  for f in "$EDIR"/*.yaml; do
+    [ -f "$f" ] || continue
+    # (a) annotation side — quoted value is the k8s norm; bare digits
+    # tolerated. This one line rule serves BOTH annotation homes: the
+    # pod-template patch (kustomization.yaml) and the ES metadata block
+    # (externalsecret.yaml) carry the identical `omicron/config.epoch: "N"`
+    # shape, so the trio's two annotation sides flip from one generic pattern.
     sed -E -i \
       -e 's|(omicron/config\.epoch"?[[:space:]]*:[[:space:]]*")[0-9]+(")|\1'"$EPOCH"'\2|g' \
       -e 's|(omicron/config\.epoch"?[[:space:]]*:[[:space:]]*)[0-9]+([[:space:]]*)$|\1'"$EPOCH"'\2|' \
@@ -153,16 +193,17 @@ if [ -n "$EPOCH" ]; then
 fi
 
 if git diff --quiet; then echo "no change ($APP already at $TAG${EPOCH:+ with epoch $EPOCH}) — nothing to propose"; exit 0; fi
-SUBJ="deploy: bump ${APP} → ${TAG}${EPOCH:+ + config epoch ${EPOCH}}"
+SUBJ="deploy: bump ${APP} (${ENV}) → ${TAG}${EPOCH:+ + config epoch ${EPOCH}}"
 MSG="$SUBJ
 
 machine-generated by anvil/set-image-pr from ${IMAGE}@${TAG}
 (app commit already human-reviewed;"
 if [ -n "$EPOCH" ]; then
   MSG="$MSG
-this PR flips the epoch PAIR — omicron/config.epoch + the gate's --declared
-arg — in $EDIR, locksteps the ${APP} gate-image newTag pins across
-overlays/production/*, and validate-all asserts pair equality after)"
+this PR flips the epoch TRIO — pod-template omicron/config.epoch + the gate's
+--declared arg + the ExternalSecret's omicron/config.epoch annotation — in
+$EDIR, locksteps the ${APP} image pins across environments/${ENV}/*, and
+validate-all asserts trio equality after)"
 else
   MSG="$MSG
 this PR changes only images: lines)"
@@ -193,14 +234,14 @@ git push -q "https://vortex-bot-ci:${VORTEX_BOT_PAT}@github.com/kanatabi/vortex.
 export GH_TOKEN="$VORTEX_BOT_PAT"
 gh label create deploy-bump --repo kanatabi/vortex --color 7CFC8A \
   --description "automated image bump — auto-merge eligible" >/dev/null 2>&1 || true
-PR_TITLE="deploy: bump ${APP} → ${TAG}${EPOCH:+ + config epoch ${EPOCH}}"
-PR_BODY="Automated deploy bump for \`${IMAGE}:${TAG}\` (source commit already human-reviewed in kanatabi/${APP})."
-PR_BODY+=$'\n'"Files touched (fence-checked: images: stanzas and the epoch pair only):"
+PR_TITLE="deploy: bump ${APP} (${ENV}) → ${TAG}${EPOCH:+ + config epoch ${EPOCH}}"
+PR_BODY="Automated deploy bump for \`${IMAGE}:${TAG}\` in the **${ENV}** environment (source commit already human-reviewed in kanatabi/${APP})."
+PR_BODY+=$'\n'"Files touched (fence-checked: images: stanzas and the epoch trio only, under environments/${ENV}/):"
 PR_BODY+=$'\n'"$(git diff --name-only 'HEAD^' HEAD | sed 's|^|- `|; s|$|`|')"
 if [ -n "$EPOCH" ]; then
-  PR_BODY+=$'\n\n'"Config epoch pair (`omicron/config.epoch` + gate `--declared`) flipped to `${EPOCH}` in lockstep with the gate image pins."
+  PR_BODY+=$'\n\n'"Config epoch TRIO (`omicron/config.epoch` pod annotation + gate `--declared` + ExternalSecret annotation) flipped to \`${EPOCH}\` in lockstep with the ${APP} image pins across environments/${ENV}/*."
 fi
-PR_BODY+=$'\n'"Rendered validation ran BEFORE this PR opened (anvil deploy-plan/deploy gates, incl. epoch-pair consistency)."
+PR_BODY+=$'\n'"Rendered validation ran BEFORE this PR opened (anvil deploy-plan/deploy gates, incl. epoch-trio consistency)."
 PR_BODY+=$'\n'"Merges automatically iff DEPLOY_AUTOMERGE=on and validate-manifests is green."
 URL=$(gh pr create --repo kanatabi/vortex --base main --head "$BRANCH" \
   --title "$PR_TITLE" --label deploy-bump --body "$PR_BODY")
