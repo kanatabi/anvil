@@ -4,8 +4,9 @@ description: >
   image bump against the real vortex main state, runs the full manifest
   validation, prints current-pin -> proposed-pin and the exact rendered diff —
   and pushes NOTHING. A human reads this log (and the step summary) before
-  approving the deploy-open job. Needs the vortex-bot-pat for the PRIVATE
-  clone; the run never writes to vortex.
+  approving the deploy-open job. Needs the vortex-bot-pat for the
+  PAT-authenticated clone (push-perms; needed for the open step); the run
+  never writes to vortex.
 inputs:
   app:
     description: short image name (lumen|earendil|mellon) — also the vortex dir

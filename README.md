@@ -42,7 +42,7 @@ bin/
                       RELEASE_BOT_PAT (a GITHUB_TOKEN-pushed tag never
                       triggers a workflow — the silent no-deploy trap), then
                       gh release create. Refuses to run without the PAT.
-  set-image-pr.sh     the bump flow: clone vortex (PAT — it is PRIVATE),
+  set-image-pr.sh     the bump flow: clone vortex (PAT — push+PR creds),
                       kustomize edit set image, branch bump/<app>-<tag>,
                       PR `deploy: bump …` labelled deploy-bump; dedupes
                       against an open PR; --dry-run.
@@ -154,7 +154,8 @@ merge to main → ci.yml: gates (+ contract on earendil)
     Separately: trigger filters use the documented GLOB syntax
     (`v*.*.*`) — the regex-in-slashes form is not promised for
     `on.push.tags` and we don't gamble on unverified filter syntax.
-    (GitHub also hides repos behind 404s — see the checkout lesson.)
+    (GitHub also hides repos you can't see behind 404s — see the checkout
+    lesson. That one is about the estate's still-private repos, not vortex.)
 
 **Double-approve = double-release:** approving two bump jobs (two different
 environments) pushes two valid tags and two bump PRs; nothing corrupts
@@ -180,14 +181,17 @@ So `kustomize edit set image` rewrites ONLY the entry it owns: a bump diff is
 admits. A non-canonicalized file would be silently reformatted by the edit
 and trip the fence — fail-safe, but the PR lands on a human instead.
 
-### Cross-repo checkout of a PRIVATE repo
+### The 404 lesson: cross-repo checkout of a repo you can't see
 
-`kanatabi/vortex` is private, and GitHub answers **404 — not 403 — for
-private repos you cannot see** (it hides existence). "Repo not found" in CI
-is therefore usually a missing token, not a missing repo: a cross-repo
-checkout/clone of a private repo MUST pass an explicit token (set-image-pr.sh
-clones with `x-access-token:${VORTEX_BOT_PAT}`); public repos are fine with
-the default `GITHUB_TOKEN`.
+GitHub answers **404 — not 403 — for private repos you cannot see** (it hides
+existence). "Repo not found" in CI is therefore usually a missing token, not a
+missing repo: a cross-repo checkout/clone of a PRIVATE repo MUST pass an
+explicit token. That was vortex's story during the private era — the clone fix
+(59e8090) added `x-access-token:${VORTEX_BOT_PAT}` for exactly that reason —
+until it went public on 2026-11-13. The PAT clone stays: pushes and PR creation
+need the credentials anyway, and a PAT-authenticated clone behaves the same for
+any visibility. The lesson itself still bites: `kanatabi/earendil` and
+`kanatabi/mellon` are private, so their cross-repo steps pass a token too.
 
 ## Secrets & variables referenced (never stored here)
 
