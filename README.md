@@ -161,9 +161,16 @@ merge to main → ci.yml: gates (+ contract on earendil)
         and the eventual PR — carry the epoch TRIO flip too (per the --env
         it plans for); a bump PR may be CONFIG-ONLY (same image tags, trio
         flips, validate proves consistency).
-      deploy-open (PARKS on the PROTECTED `deploy` environment — one job,
-        one env, one card): approval opens the bump PR via set-image-pr,
-        which re-validates BEFORE pushing (born-validated PRs).
+      deploy-<env> (ONE CHAIN PER ENVIRONMENT — each parks on its own
+        PROTECTED `deploy-<env>` environment: one card, one bump PR, and
+        the ladder is the APPROVAL ORDER, staging before production).
+        A fail-closed `gate-audit` job runs BEFORE any deploy job: the
+        environment must EXIST and carry required reviewers — GitHub
+        auto-creates referenced-but-missing environments UNPROTECTED,
+        and an unprotected park silently no-ops (incident 2026-11-13:
+        v3.0.0 fired unattended). Approval opens that env's bump PR via
+        set-image-pr, which re-validates BEFORE pushing
+        (born-validated PRs).
   → vortex CI: validate-manifests + rendered diff (independent second opinion)
   → auto-merge ONLY if every guard holds AND DEPLOY_AUTOMERGE=on (absent = off)
   → Argo (targetRevision: HEAD) syncs within its poll interval
