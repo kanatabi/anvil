@@ -93,7 +93,15 @@ test -d "$TARGET" || { echo "no $TARGET in vortex — wrong app or env name?"; e
 
 echo "==== pin pre-flight ===="
 echo "current pin in vortex main ($TARGET):"
-git show "HEAD:$TARGET/kustomization.yaml" | sed -n '/^images:/,/^[^ ]/p' | sed 's/^/    /'
+# the images: stanza in BOTH authoring shapes — canonical kustomize puts list
+# items flush-left (`- name:`), hand-form indents them (`  - name:`) — so the
+# range ends only at a top-level KEY line (col-0, not a dash/comment), which
+# the old `/^[^ ]/` end-pattern got wrong for the canonical form.
+git show "HEAD:$TARGET/kustomization.yaml" | awk '
+  !p && /^images:[[:space:]]*$/ { p = 1; print; next }
+  p && (/^[[:space:]]+/ || /^-/) { print; next }
+  p { exit }
+' | sed 's/^/    /'
 echo "proposed: ${APP} -> ${IMAGE}:${TAG} (env: ${ENV})"
 [ -n "$EPOCH" ] && echo "epoch trio: $TARGET/ -> $EPOCH (pod annotation + --declared + ES annotation)"
 echo "=========================="
