@@ -276,31 +276,30 @@ condition: the vortex PR-d that removes `overlays/` (the
 `feat/environments-foundation` line) lands → the next reviewed anvil commit
 strips these transition patterns.** Do not extend them.
 
-**Lockstep scope (current ruling).** Every bump moves `name: <app>` images
-stanzas inside the BUMP'S OWN ENV only — `environments/<env>/*` (+ the
-transition `overlays/<env>/*`). That keeps the bot's PR inside the env path
-fence: a production bump never re-pins staging, and each env's gate pins
-move when that env bumps lumen. The sibling overlay header in vortex
-(`environments/production/lumen`) words a CROSS-env sweep (one lumen bump
-moving every env's gate pins + the bases); that is not expressible under the
-env-scoped fence above — if the owner wants it, sweep AND fence AND the
-env-mismatch bail need ONE joint re-ruling.
+**Lockstep scope (RESOLVED 2026-11-13 convergence).** Every bump moves
+`name: <app>` images stanzas inside the BUMP'S OWN ENV only —
+`environments/<env>/*` (+ the transition `overlays/<env>/*`). That keeps the
+bot's PR inside the env path fence: a production bump never re-pins
+staging, and each env's gate pins move when that env bumps lumen. The
+earlier open question (vortex headers worded a CROSS-env sweep "every env
++ the bases") is closed by two convergent facts: the fence makes
+cross-env travel unmergeable, AND the bases no longer carry pins at all
+(vortex convergence — fixture-proven kustomize v5.8.1 semantics: a base
+image transformation rewrites the name BEFORE any overlay stanza can
+match, so a base pin silently outranks every env tree). Env overlays are
+the ONLY version homes; same-env lockstep is therefore complete, not
+merely fence-convenient.
 
-> TABLE STATUS (converged 2026-11-13): `bin/expected-kinds.txt` mirrors the
-> post config-gate + hub-split main (+4 kinds per production app overlay:
-> gate Job + RBAC, exactly as the parallel PRs promised). The lesson stands:
-> while sibling manifest PRs are mid-flight, do NOT one-shot `--update` —
-> it would freeze a transient reality; regenerate against the converged
-> main and ship the refresh in its own reviewed commit.
->
-> PENDING NOISE (env-model round, this writing): the vortex re-homing makes
-> every `overlays/<env>/<app>/` key MISSING and every
-> `environments/<env>/<app>/` key UNLISTED the moment the cutover merges —
-> the trio lines add no KINDS, so production/staging app overlays keep
-> their counts under the new key; foundation dirs re-key from
-> `overlays/production/<platform-app>` at the same count unless the
-> restructure also changes their bodies. The owner regenerates the table
-> against converged main (its own reviewed commit), NOT from any tool here.
+> TABLE STATUS (CONVERGED 2026-11-13): `bin/expected-kinds.txt` was
+> regenerated against the converged environments/ main (anvil merge
+> 9ead865 — 23 dirs; overlays/* rows retired, environments/* landed,
+> `applications/certificates/` 5→7). The env-model cutover also REMOVED
+> the base image stanzas (vortex 01937c2 — kustomize base-outranks-overlay
+> semantics made per-env pinning impossible otherwise), which is
+> kind-invariant: the table needed no follow-up. The lesson stands: while
+> sibling manifest PRs are mid-flight, do NOT one-shot `--update` — it
+> would freeze a transient reality; regenerate against the converged main
+> and ship the refresh in its own reviewed commit.
 
 ### The 404 lesson: cross-repo checkout of a repo you can't see
 
