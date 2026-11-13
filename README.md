@@ -29,7 +29,7 @@ bin/
                       PAT needs Actions:RW). Warn-only by design: the release
                       already happened — a red settle would lie. Fallback:
                       decline the siblings by hand.
-  validate-all.sh     kustomize build of every kustomize dir (applications/,
+  validate-all.sh     kustomize build of every kustomize dir (bases/,
                       environments/<env>/<app>, and the legacy overlays/ tree
                       during the transition), kind-count assertions
                       (expected-kinds.txt), and STRUCTURAL invariants over
@@ -240,7 +240,8 @@ Owner ruling: the estate has THREE environments under `environments/` —
 ```
 environments/{foundation,staging,production}/<app>/kustomization.yaml
     + per-overlay files (externalsecret.yaml, patches…)
-applications/<app>/          the bases — name unchanged, shared
+bases/<app>/                 the bases (renamed from `applications/`
+                             2026-11-14 — the prose always said "bases")
 apps/{foundation,staging,production}/*.yaml   per-env Argo Application CRs
 bootstrap/apps-hub-{foundation,staging,production}.yaml
 ```
@@ -277,7 +278,10 @@ was minted for.
 legacy tree, tooling ALSO accepts: the `overlays/*/*/` glob in validate-all's
 discovery, the pre-restructure paths in auto-merge's fence
 (`applications/<app>/kustomization.yaml`, `overlays/production/**` — legacy-
-shaped branches only, marked TRANSITION in the code), and the
+shaped branches only, marked TRANSITION in the code; the `applications/`
+leg is additionally STRANDED by the 2026-11-14 `bases/` rename — the path
+no longer exists, so the deprecated legacy bump grammar has nothing left
+to touch), and the
 `overlays/${ENV}/*` leg of set-image-pr's lockstep sweep. **Removal
 condition: the vortex PR-d that removes `overlays/` (the
 `feat/environments-foundation` line) lands → the next reviewed anvil commit
@@ -313,6 +317,12 @@ merely fence-convenient.
 > ingress.yaml now; env-overlay rows stay 8 — the Ingress moved between
 > layers, not in or out). Commit pairs with the vortex refactor PR, which
 > must bump the validate-manifests ref to this SHA in the same PR.
+>
+> 2026-11-14 (bases/ rename): the TEN `applications/*` row keys become
+> `bases/*` — counts UNCHANGED (the rename moves path strings, not
+> manifests), and validate-all's discovery glob follows
+> (`applications/*/` → `bases/*/`). Ride the vortex rename commit: that
+> PR must bump its validate-manifests ref to THIS branch's tip.
 
 ### The 404 lesson: cross-repo checkout of a repo you can't see
 
