@@ -12,9 +12,41 @@ runs:
     - name: install pinned helm (v3.22.1 — the version our walkthrough proved)
       shell: bash
       run: |
-        command -v helm >/dev/null 2>&1 && exit 0
-        curl -sfL https://raw.githubusercontent.com/helm/helm/v3.22.1/scripts/get-helm-3 \
-          | sudo -E HELM_INSTALL_DIR=/usr/local/bin env PATH="$PATH" bash
+        # WHY NOT get-helm-3 (audited 2026-11-13): the script at tag v3.22.1 —
+        # and at v4.3.1, the URL this step previously resembled — resolves its
+        # DEFAULT version from the MUTABLE CDN pointer, not the tag it was
+        # fetched from. checkDesiredVersion():
+        #   latest_release_url="https://get.helm.sh/helm3-latest-version"
+        #   TAG=$(curl -Ls "$latest_release_url" | grep '^v[0-9]')
+        # Called without --version it installs whatever 3.x is newest AT RUN
+        # TIME (the pointer serves v3.22.1 today — it will serve v3.23.z the
+        # week helm ships it). "Pinned" was a comment, not a fact. Evidence:
+        #   https://raw.githubusercontent.com/helm/helm/v3.22.1/scripts/get-helm-3
+        #   https://raw.githubusercontent.com/helm/helm/v4.3.1/scripts/get-helm-3
+        # Replaced with a pinned-binary install: exact tarball from the Helm
+        # CDN, sha256 EMBEDDED here (verified equal to the published checksum
+        # at https://get.helm.sh/helm-v3.22.1-linux-amd64.tar.gz.sha256sum and
+        # to a local sha256sum of the download), extracted, version-checked.
+        # No sudo, no dynamic "latest" resolution: PATH rides GITHUB_PATH.
+        HELM_VERSION=v3.22.1
+        HELM_SHA256=896cf63684a42a723d61c980369d6e588330927deb13676ca0d85006dd6da0ea
+        if command -v helm >/dev/null 2>&1 &&
+           [ "$(helm version --template '{{.Version}}' 2>/dev/null)" = "$HELM_VERSION" ]; then
+          exit 0   # runner already carries the exact pin
+        fi
+        case "$(uname -s)/$(uname -m)" in
+          Linux/x86_64) ARCH=linux-amd64 ;;
+          *) echo "the pinned helm bundle covers linux-amd64 runners only — add this arch deliberately (checksum embeds are per-artifact)"; exit 1 ;;
+        esac
+        cd "$(mktemp -d)"
+        curl -sfLO "https://get.helm.sh/helm-${HELM_VERSION}-${ARCH}.tar.gz"
+        echo "${HELM_SHA256}  helm-${HELM_VERSION}-${ARCH}.tar.gz" | sha256sum -c
+        tar -xzf "helm-${HELM_VERSION}-${ARCH}.tar.gz"
+        HELM_BIN="${RUNNER_TEMP:-$PWD}/anvil-bin"
+        mkdir -p "$HELM_BIN"
+        mv "$ARCH/helm" "$HELM_BIN/helm"
+        "$HELM_BIN/helm" version | grep -q "$HELM_VERSION"   # belt: the binary IS the pin
+        echo "$HELM_BIN" >> "$GITHUB_PATH"
     - name: assertions
       shell: bash
       run: bash "$GITHUB_ACTION_PATH/../../bin/validate-all.sh" .
