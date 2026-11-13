@@ -159,6 +159,19 @@ for d in "${dirs[@]}"; do
       fail=1
     fi
   fi
+  # ---- class 4b: placeholder survival & gate orphans (the vacuous-pass hole,
+  # found by the epoch round's own author): an overlay that includes
+  # components/config-gate but forgets the full-args replace ships
+  # OVERLAY-MUST-REPLACE (prod would die at sync exit-2 — too late); an
+  # overlay that ships the Job WITHOUT the epoch annotation passes class 4
+  # vacuously — silence is exactly the bug class this battery exists to catch.
+  if printf '%s\n' "$out" | grep -q 'OVERLAY-MUST-REPLACE'; then
+    echo "FAIL placeholder $d — OVERLAY-MUST-REPLACE survived into the render; the overlay must replace the gate args array wholly"; fail=1
+  fi
+  if printf '%s\n' "$out" | grep -q 'name: config-gate' &&
+     ! printf '%s\n' "$out" | grep -q 'omicron/config.epoch'; then
+    echo "FAIL gate-orphan $d — renders a config-gate Job with no omicron/config.epoch annotation in sight"; fail=1
+  fi
 done
 
 if [ -n "$UPDATE" ]; then
