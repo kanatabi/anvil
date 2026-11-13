@@ -29,11 +29,17 @@ bin/
                       PAT needs Actions:RW). Warn-only by design: the release
                       already happened — a red settle would lie. Fallback:
                       decline the siblings by hand.
-  validate-all.sh     kustomize build of every applications/ + overlays/ dir,
-                      kind-count assertions (expected-kinds.txt), config-shape
-                      assertions (zero inline config literals; envFrom present;
-                      PreSync hook on the lumen chains). --update regenerates
-                      the table: a manifest PR MUST bring its truth update.
+  validate-all.sh     kustomize build of every kustomize dir, kind-count
+                      assertions (expected-kinds.txt), and STRUCTURAL
+                      invariants over the RENDERED output — no dir-name
+                      folklore: zero inline config literals in Deployment
+                      docs, envFrom required wherever an ExternalSecret +
+                      Deployment coexist, PreSync hook asserted from the
+                      *migrate* FILE existing in a dir, and the EPOCH PAIR:
+                      wherever omicron/config.epoch / --declared appear in
+                      a render, the two sides must be EQUAL (half-bump =
+                      red). --update regenerates the table: a manifest PR
+                      MUST bring its truth update.
   expected-kinds.txt  the assertion table. Lives HERE, reviewed like code.
   diff-render.sh      renders every dir at two refs, emits a unified diff of
                       the RENDERED manifests — what Argo will apply, not the
@@ -45,15 +51,25 @@ bin/
   set-image-pr.sh     the bump flow: clone vortex (PAT — push+PR creds),
                       kustomize edit set image, branch bump/<app>-<tag>,
                       PR `deploy: bump …` labelled deploy-bump; dedupes
-                      against an open PR; --dry-run.
+                      against an open PR; --dry-run. --config-epoch N flips
+                      the epoch PAIR (annotation + --declared) in the SAME
+                      commit — refuse-half-bump by construction — and every
+                      bump locksteps the app's gate-image newTag pins across
+                      overlays/production/* (three pins, one commit).
   auto-merge.sh       the conditional merger. Merges iff: author == bot,
                       label deploy-bump, every file ∈
-                      applications/*/kustomization.yaml, every changed diff
-                      line lives in the images: block, validate-manifests
+                      applications/*/kustomization.yaml ∪
+                      overlays/production/*/kustomization.yaml ∪
+                      overlays/production/<app-from-head-ref>/*.yaml, every
+                      changed diff line is images:-stanza OR a
+                      config.epoch/--declared line, validate-manifests
                       green, and the VARIABLE DEPLOY_AUTOMERGE == "on"
                       (absent means off — fail-safe).
 actions/
-  validate-manifests/ installs pinned helm (v3.22.1) then runs the scripts
+  validate-manifests/ installs the pinned helm BINARY (v3.22.1 tarball,
+                      sha256 embedded — get-helm-3's default is a MUTABLE
+                      CDN pointer, verified 2026-11-13, so the old
+                      "pinned" claim wasn't one) then runs the scripts
   semver-release/     the approval-gated release job: fetch --tags →
                       bin/next-version.sh (+ collision guard: refuses loudly
                       if the computed tag exists locally OR on origin) →
@@ -128,7 +144,10 @@ merge to main → ci.yml: gates (+ contract on earendil)
       publish-image: ghcr.io/kanatabi/<app>:vX.Y.Z (+ :latest alias)
       deploy-plan (AUTOMATIC): rehearsal against real vortex main — prints
         current-pin → proposed-pin + validated rendered diff, pushes nothing.
-        THIS is what the human reads.
+        THIS is what the human reads. With config-epoch set the rehearsal —
+        and the eventual PR — carry the epoch PAIR flip too; a bump PR may
+        be CONFIG-ONLY (same image tags, pair flips, validate proves
+        consistency).
       deploy-open (PARKS on the PROTECTED `deploy` environment — one job,
         one env, one card): approval opens the bump PR via set-image-pr,
         which re-validates BEFORE pushing (born-validated PRs).
@@ -172,14 +191,31 @@ Tag doctrine:
 
 Human PRs to vortex are untouched: author≠bot fails the first condition gate.
 
-### Why bump diffs are exactly the `images:` stanza
+### Why bump diffs are exactly images: stanzas + the epoch pair
 
-vortex checks every `applications/*/kustomization.yaml` in
-kustomize-canonical form — the shape `kustomize edit` itself would write.
-So `kustomize edit set image` rewrites ONLY the entry it owns: a bump diff is
-2–3 lines inside `images:`, which is exactly what the auto-merge line fence
-admits. A non-canonicalized file would be silently reformatted by the edit
-and trip the fence — fail-safe, but the PR lands on a human instead.
+vortex checks every kustomization it owns in kustomize-canonical form — the
+shape `kustomize edit` itself would write. So `kustomize edit set image`
+rewrites ONLY the entry it owns, and a bump diff is 2–3 lines inside
+`images:`. Since the config-gate landed, the bump diff may ALSO carry the
+epoch PAIR — `omicron/config.epoch: "N"` and the gate's `--declared` arg,
+flipped TOGETHER by `--config-epoch` in one commit — plus the lockstep lines
+moving every `name: <app>` gate-image pin under `overlays/production/*` to
+the new tag. A bump PR may even be CONFIG-ONLY: image tags unchanged, the
+epoch pair flips, and validate-all's class-4 rule is what PROVES the pair is
+consistent (a one-sided flip is refused before the PR ever opens). The
+auto-merge fence grew to admit exactly this and it grew **BY PATTERN, never
+by app name**: lines containing `config.epoch`/`--declared` or living in an
+images: stanza, files under `applications/*`, `overlays/production/*/…` —
+the app in the path fence comes from the head ref, not from a list. A
+non-canonicalized file would be silently reformatted by the edit and trip
+the fence — fail-safe, but the PR lands on a human instead.
+
+> TABLE STATUS (2026-11-13): `bin/expected-kinds.txt`
+> still mirrors the PRE-config-gate shape. The vortex split + gate PRs are
+> landing in parallel and every merge moves counts (+4 per production app
+> overlay: gate Job + RBAC). The table awaits a refresh AFTER those land —
+> do NOT trust a one-shot `--update` mid-flight; regenerate against the
+> converged main and ship it in its own reviewed commit.
 
 ### The 404 lesson: cross-repo checkout of a repo you can't see
 
@@ -220,6 +256,10 @@ bin/diff-render.sh  <path-to-vortex> <base-ref>
 VORTX=<path-to-vortex> bin/set-image-pr.sh --app lumen \
     --image ghcr.io/kanatabi/lumen --tag v9.9.9-test --dry-run
     # needs no token, pushes nothing — prepares the bump branch in a temp copy
+VORTX=<path-to-vortex> bin/set-image-pr.sh --app lumen \
+    --image ghcr.io/kanatabi/lumen --tag v9.9.9-test --config-epoch 1 --plan
+    # same rehearsal, printing the epoch-pair flip + gate-image lockstep as
+    # evidence; --config-epoch refuses (exit 1) if the pair doesn't pre-exist
 ```
 
 ## Backlog — centralized repo settings (deferred by the owner 2026-11-13)
