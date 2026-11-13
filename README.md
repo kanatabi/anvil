@@ -210,12 +210,12 @@ the app in the path fence comes from the head ref, not from a list. A
 non-canonicalized file would be silently reformatted by the edit and trip
 the fence — fail-safe, but the PR lands on a human instead.
 
-> TABLE STATUS (2026-11-13): `bin/expected-kinds.txt`
-> still mirrors the PRE-config-gate shape. The vortex split + gate PRs are
-> landing in parallel and every merge moves counts (+4 per production app
-> overlay: gate Job + RBAC). The table awaits a refresh AFTER those land —
-> do NOT trust a one-shot `--update` mid-flight; regenerate against the
-> converged main and ship it in its own reviewed commit.
+> TABLE STATUS (converged 2026-11-13): `bin/expected-kinds.txt` mirrors the
+> post config-gate + hub-split main (+4 kinds per production app overlay:
+> gate Job + RBAC, exactly as the parallel PRs promised). The lesson stands:
+> while sibling manifest PRs are mid-flight, do NOT one-shot `--update` —
+> it would freeze a transient reality; regenerate against the converged
+> main and ship the refresh in its own reviewed commit.
 
 ### The 404 lesson: cross-repo checkout of a repo you can't see
 
