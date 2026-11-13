@@ -8,8 +8,14 @@ description: >
   Release-only doctrine: pass the vX.Y.Z tag, never an alias.
 inputs:
   app:
-    description: short image name (lumen|earendil|mellon) — also the vortex dir
+    description: short image name (lumen|earendil|mellon) — also the vortex app dir
     required: true
+  env:
+    description: >
+      Target environment: foundation|staging|production. Selects the vortex
+      overlay the pin + epoch trio live in (environments/<env>/<app>/) and the
+      bump branch grammar bump/<app>-<env>-<tag>.
+    default: production
   tag:
     description: image tag to pin (MUST be vMAJOR.MINOR.PATCH for deployments)
     required: true
@@ -19,10 +25,11 @@ inputs:
   config-epoch:
     description: >
       Optional non-negative integer. When the deployed config version moves,
-      the bump PR may carry the epoch pair (omicron/config.epoch annotation +
-      the gate's --declared arg) in lockstep: set it here and the PR flips
-      BOTH sides plus the gate-image pins in one commit. Empty = image-only
-      bump (lockstep still rides — the pair stays as-is).
+      the bump PR may carry the epoch trio (pod-template omicron/config.epoch
+      annotation + the gate's --declared arg + the ExternalSecret's
+      omicron/config.epoch annotation) in lockstep: set it here and the PR
+      flips ALL THREE sides plus the same-env image pins in one commit.
+      Empty = image-only bump (lockstep still rides — the trio stays as-is).
     default: ""
 runs:
   using: composite
@@ -33,12 +40,14 @@ runs:
         VORTEX_BOT_PAT: ${{ inputs.vortex-bot-pat }}
         APP: ${{ inputs.app }}
         TAG: ${{ inputs.tag }}
+        ENVIRONMENT: ${{ inputs.env }}
         CONFIG_EPOCH: ${{ inputs.config-epoch }}
       run: |
         ARGS=()
         [ -n "$CONFIG_EPOCH" ] && ARGS+=(--config-epoch "$CONFIG_EPOCH")
         bash "$GITHUB_ACTION_PATH/../../bin/set-image-pr.sh" \
           --app "$APP" \
+          --env "$ENVIRONMENT" \
           --image "ghcr.io/${GITHUB_REPOSITORY_OWNER}/${APP}" \
           --tag "$TAG" \
           "${ARGS[@]+"${ARGS[@]}"}"
