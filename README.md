@@ -29,16 +29,19 @@ bin/
                       PAT needs Actions:RW). Warn-only by design: the release
                       already happened — a red settle would lie. Fallback:
                       decline the siblings by hand.
-  validate-all.sh     kustomize build of every kustomize dir, kind-count
-                      assertions (expected-kinds.txt), and STRUCTURAL
-                      invariants over the RENDERED output — no dir-name
-                      folklore: zero inline config literals in Deployment
-                      docs, envFrom required wherever an ExternalSecret +
-                      Deployment coexist, PreSync hook asserted from the
-                      *migrate* FILE existing in a dir, and the EPOCH PAIR:
-                      wherever omicron/config.epoch / --declared appear in
-                      a render, the two sides must be EQUAL (half-bump =
-                      red). --update regenerates the table: a manifest PR
+  validate-all.sh     kustomize build of every kustomize dir (applications/,
+                      environments/<env>/<app>, and the legacy overlays/ tree
+                      during the transition), kind-count assertions
+                      (expected-kinds.txt), and STRUCTURAL invariants over
+                      the RENDERED output — no dir-name folklore: zero
+                      inline config literals in Deployment docs, envFrom
+                      required wherever an ExternalSecret + Deployment
+                      coexist, PreSync hook asserted from the *migrate* FILE
+                      existing in a dir, and the EPOCH TRIO: wherever
+                      omicron/config.epoch / --declared appear in a render,
+                      ALL THREE sides (pod annotation, gate --declared, ES
+                      annotation) must EXIST and be EQUAL (half/2-of-3 flip
+                      = red). --update regenerates the table: a manifest PR
                       MUST bring its truth update.
   expected-kinds.txt  the assertion table. Lives HERE, reviewed like code.
   diff-render.sh      renders every dir at two refs, emits a unified diff of
@@ -49,18 +52,25 @@ bin/
                       triggers a workflow — the silent no-deploy trap), then
                       gh release create. Refuses to run without the PAT.
   set-image-pr.sh     the bump flow: clone vortex (PAT — push+PR creds),
-                      kustomize edit set image, branch bump/<app>-<tag>,
+                      kustomize edit set image in environments/<env>/<app>/
+                      (--env foundation|staging|production, default
+                      production), branch bump/<app>-<env>-<tag>,
                       PR `deploy: bump …` labelled deploy-bump; dedupes
                       against an open PR; --dry-run. --config-epoch N flips
-                      the epoch PAIR (annotation + --declared) in the SAME
-                      commit — refuse-half-bump by construction — and every
-                      bump locksteps the app's gate-image newTag pins across
-                      overlays/production/* (three pins, one commit).
+                      the epoch TRIO (pod annotation + --declared + ES
+                      annotation) in the SAME commit — refuses unless all
+                      three sides pre-exist (half-bump refusal by
+                      construction) — and every bump locksteps the app's
+                      image newTag pins across its ENV's overlay dirs
+                      (one env, one commit).
   auto-merge.sh       the conditional merger. Merges iff: author == bot,
-                      label deploy-bump, every file ∈
-                      applications/*/kustomization.yaml ∪
+                      label deploy-bump, head ref parses an ENV
+                      (bump/<app>-<env>-<tag>, or the DEPRECATED legacy
+                      bump/<app>-<tag> ⇒ production; unparseable env =
+                      BAIL), every file ∈ environments/<env-from-ref>/
+                      (transition, legacy refs only: applications/*/kustomization.yaml ∪
                       overlays/production/*/kustomization.yaml ∪
-                      overlays/production/<app-from-head-ref>/*.yaml, every
+                      overlays/production/<app-from-head-ref>/*.yaml), every
                       changed diff line is images:-stanza OR a
                       config.epoch/--declared line, validate-manifests
                       green, and the VARIABLE DEPLOY_AUTOMERGE == "on"
@@ -81,13 +91,16 @@ actions/
                       v-tags). Raw docker + the workflow token.
   deploy-plan/        evidence-only rehearsal of the bump against REAL
                     vortex main: pin pre-flight + full validation +
-                    exact diff, pushes NOTHING.
+                    exact diff, pushes NOTHING. Takes `env:`
+                    (foundation|staging|production, default production).
   deploy-bump/      bin/set-image-pr.sh for an already-pushed tag — the
                     PR half. Now validates the render BEFORE pushing
                     (a bump PR whose manifests do not build is refused;
                     --skip-validate emergency-only), so PRs arrive
                     born-validated; deploy-plan above provides the
-                    evidence the human reads before approving.
+                    evidence the human reads before approving. Takes
+                    `env:` too — it selects the environments/<env>/<app>
+                    target and the bump/<app>-<env>-<tag> branch.
                       Deliberately ZERO third-party actions everywhere, so
                       the pinning question is only ever about anvil itself.
 ```
@@ -145,9 +158,9 @@ merge to main → ci.yml: gates (+ contract on earendil)
       deploy-plan (AUTOMATIC): rehearsal against real vortex main — prints
         current-pin → proposed-pin + validated rendered diff, pushes nothing.
         THIS is what the human reads. With config-epoch set the rehearsal —
-        and the eventual PR — carry the epoch PAIR flip too; a bump PR may
-        be CONFIG-ONLY (same image tags, pair flips, validate proves
-        consistency).
+        and the eventual PR — carry the epoch TRIO flip too (per the --env
+        it plans for); a bump PR may be CONFIG-ONLY (same image tags, trio
+        flips, validate proves consistency).
       deploy-open (PARKS on the PROTECTED `deploy` environment — one job,
         one env, one card): approval opens the bump PR via set-image-pr,
         which re-validates BEFORE pushing (born-validated PRs).
@@ -191,24 +204,87 @@ Tag doctrine:
 
 Human PRs to vortex are untouched: author≠bot fails the first condition gate.
 
-### Why bump diffs are exactly images: stanzas + the epoch pair
+### Why bump diffs are exactly images: stanzas + the epoch trio
 
 vortex checks every kustomization it owns in kustomize-canonical form — the
 shape `kustomize edit` itself would write. So `kustomize edit set image`
 rewrites ONLY the entry it owns, and a bump diff is 2–3 lines inside
 `images:`. Since the config-gate landed, the bump diff may ALSO carry the
-epoch PAIR — `omicron/config.epoch: "N"` and the gate's `--declared` arg,
-flipped TOGETHER by `--config-epoch` in one commit — plus the lockstep lines
-moving every `name: <app>` gate-image pin under `overlays/production/*` to
-the new tag. A bump PR may even be CONFIG-ONLY: image tags unchanged, the
-epoch pair flips, and validate-all's class-4 rule is what PROVES the pair is
-consistent (a one-sided flip is refused before the PR ever opens). The
+epoch TRIO — pod-template `omicron/config.epoch: "N"`, the gate's `--declared`
+arg, and the ExternalSecret's `omicron/config.epoch: "N"` metadata annotation,
+all flipped TOGETHER by `--config-epoch` in one commit — plus the lockstep
+lines moving every `name: <app>` pin in the bump env's overlay dirs to the
+new tag. A bump PR may even be CONFIG-ONLY: image tags unchanged, the epoch
+trio flips, and validate-all's class-4 rule is what PROVES the trio is
+consistent (a one- or two-sided flip is refused before the PR ever opens). The
 auto-merge fence grew to admit exactly this and it grew **BY PATTERN, never
-by app name**: lines containing `config.epoch`/`--declared` or living in an
-images: stanza, files under `applications/*`, `overlays/production/*/…` —
-the app in the path fence comes from the head ref, not from a list. A
+by app or env name**: lines containing `config.epoch`/`--declared` or living in an
+images: stanza, files under the head ref's `environments/<env>/` — the
+app/env in the path fence comes from the branch, not from a list. A
 non-canonicalized file would be silently reformatted by the edit and trip
-the fence — fail-safe, but the PR lands on a human instead.
+the fence — fail-safe, but the PR lands on a human instead. (The reflow is
+not hypothetical: the env-model fixture battery showed one `set image` turns
+a hand-indented overlay into whole-file churn — keep landed overlays canonical.)
+
+## The environment model (contract)
+
+Owner ruling: the estate has THREE environments under `environments/` —
+
+```
+environments/{foundation,staging,production}/<app>/kustomization.yaml
+    + per-overlay files (externalsecret.yaml, patches…)
+applications/<app>/          the bases — name unchanged, shared
+apps/{foundation,staging,production}/*.yaml   per-env Argo Application CRs
+bootstrap/apps-hub-{foundation,staging,production}.yaml
+```
+
+Every deploy decision is now environment-scoped. Two contracts hang off it:
+
+**Branch grammar** — the bump branch carries the env:
+
+| shape | meaning |
+| :--- | :--- |
+| `bump/<app>-<env>-<tag>` | the app's pin/trio in `environments/<env>/`; env ∈ `foundation\|staging\|production` |
+| `bump/<app>-<tag>` | **DEPRECATED** legacy ⇒ production (branches minted before the restructure) |
+| anything else | auto-merge **BAILS** — no silent env, no widening |
+
+The env token matches the three literals and the LAST occurrence wins as the
+app/tag separator, so an app named `x-staging` cannot steal the token
+(`x-staging-production-v1.0.0` ⇒ app `x-staging`, env `production`). The tag
+shape (vX.Y.Z / sha-) never selects the env.
+
+**The epoch is a TRIO, not a pair** — per overlay dir, all three of
+
+1. the pod-template `omicron/config.epoch: "N"` annotation (kustomization patches),
+2. the gate Job's `--declared "N"` arg,
+3. the ExternalSecret's `omicron/config.epoch: "N"` metadata annotation
+
+must be byte-equal. `set-image-pr --config-epoch` refuses unless all three
+sides pre-exist; `validate-all` class 4 fails any render where ANY side
+appears without the other two, or where the values differ. Rationale: the ES
+annotation makes the *secret refresh* declare the config epoch it shipped —
+a 2-of-3 flip leaves one witness blind, the same drift class the pair rule
+was minted for.
+
+**Transition window.** Until the vortex env-model cutover PR deletes the
+legacy tree, tooling ALSO accepts: the `overlays/*/*/` glob in validate-all's
+discovery, the pre-restructure paths in auto-merge's fence
+(`applications/<app>/kustomization.yaml`, `overlays/production/**` — legacy-
+shaped branches only, marked TRANSITION in the code), and the
+`overlays/${ENV}/*` leg of set-image-pr's lockstep sweep. **Removal
+condition: the vortex PR-d that removes `overlays/` (the
+`feat/environments-foundation` line) lands → the next reviewed anvil commit
+strips these transition patterns.** Do not extend them.
+
+**Lockstep scope (current ruling).** Every bump moves `name: <app>` images
+stanzas inside the BUMP'S OWN ENV only — `environments/<env>/*` (+ the
+transition `overlays/<env>/*`). That keeps the bot's PR inside the env path
+fence: a production bump never re-pins staging, and each env's gate pins
+move when that env bumps lumen. The sibling overlay header in vortex
+(`environments/production/lumen`) words a CROSS-env sweep (one lumen bump
+moving every env's gate pins + the bases); that is not expressible under the
+env-scoped fence above — if the owner wants it, sweep AND fence AND the
+env-mismatch bail need ONE joint re-ruling.
 
 > TABLE STATUS (converged 2026-11-13): `bin/expected-kinds.txt` mirrors the
 > post config-gate + hub-split main (+4 kinds per production app overlay:
@@ -216,6 +292,15 @@ the fence — fail-safe, but the PR lands on a human instead.
 > while sibling manifest PRs are mid-flight, do NOT one-shot `--update` —
 > it would freeze a transient reality; regenerate against the converged
 > main and ship the refresh in its own reviewed commit.
+>
+> PENDING NOISE (env-model round, this writing): the vortex re-homing makes
+> every `overlays/<env>/<app>/` key MISSING and every
+> `environments/<env>/<app>/` key UNLISTED the moment the cutover merges —
+> the trio lines add no KINDS, so production/staging app overlays keep
+> their counts under the new key; foundation dirs re-key from
+> `overlays/production/<platform-app>` at the same count unless the
+> restructure also changes their bodies. The owner regenerates the table
+> against converged main (its own reviewed commit), NOT from any tool here.
 
 ### The 404 lesson: cross-repo checkout of a repo you can't see
 
@@ -255,11 +340,14 @@ bin/validate-all.sh <path-to-vortex> [--update]
 bin/diff-render.sh  <path-to-vortex> <base-ref>
 VORTX=<path-to-vortex> bin/set-image-pr.sh --app lumen \
     --image ghcr.io/kanatabi/lumen --tag v9.9.9-test --dry-run
-    # needs no token, pushes nothing — prepares the bump branch in a temp copy
-VORTX=<path-to-vortex> bin/set-image-pr.sh --app lumen \
-    --image ghcr.io/kanatabi/lumen --tag v9.9.9-test --config-epoch 1 --plan
-    # same rehearsal, printing the epoch-pair flip + gate-image lockstep as
-    # evidence; --config-epoch refuses (exit 1) if the pair doesn't pre-exist
+    # needs no token, pushes nothing — prepares bump/lumen-production-v9.9.9-test
+    # in a temp copy (--env foundation|staging|production moves the target)
+VORTX=<path-to-vortex> bin/set-image-pr.sh --app earendil --env staging \
+    --image ghcr.io/kanatabi/earendil --tag v9.9.9-test --config-epoch 1 --plan
+    # same rehearsal, printing the epoch-TRIO flip (pod annotation + --declared
+    # + ES annotation, environments/staging/earendil/) and the same-env image
+    # lockstep as evidence; --config-epoch refuses (exit 1) unless ALL THREE
+    # sides pre-exist
 ```
 
 ## Backlog — centralized repo settings (deferred by the owner 2026-11-13)
