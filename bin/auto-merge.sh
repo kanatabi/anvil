@@ -4,17 +4,27 @@
 # PR to humans. The guards are the contract — a bump PR is not trusted
 # because of who opened it, only because of what it provably contains:
 #
-#   1. head ref matches bump/<app>-<tag>
+#   1. head ref matches the bump grammar — NEW: bump/<app>-<env>-<tag> with
+#      env ∈ foundation|staging|production; LEGACY (deprecated, accepted):
+#      bump/<app>-<tag> ⇒ env=production. Unparseable env ⇒ BAIL — the
+#      pre-env code kept going with a widened generic fence on an
+#      unrecognized ref; silence-with-a-wider-gate is exactly the widening
+#      this script must never do.
 #   2. label deploy-bump present
-#   3. every changed file is inside the FENCE OF PATTERNS (never of app
-#      names): applications/<any>/kustomization.yaml (the pin), the
-#      overlays/production/<any>/kustomization.yaml stanzas (gate-image
-#      lockstep), or any *.yaml under overlays/production/<app>/ — the app
-#      parsed from the head ref — (the epoch pair lives in those files)
+#   3. every changed file is inside the FENCE OF PATTERNS (never keyed on app
+#      or env LISTS): the new model admits any file under
+#      environments/<env-from-head-ref>/ (the env's overlays hold the pin,
+#      the epoch trio, and the same-env gate lockstep stanzas). TRANSITION
+#      (legacy-shaped branches only — delete together with the vortex
+#      env-model PR that removes the overlays/ tree): applications/<app>/
+#      kustomization.yaml (the old pin), overlays/production/<any>/
+#      kustomization.yaml (the old gate-image lockstep), and any *.yaml under
+#      overlays/production/<app-from-head-ref>/ (the old epoch pair).
 #   4. every changed LINE is fence-legal syntax: inside the images: block, or
-#      a config.epoch annotation line, or a --declared arg line (both sides
-#      of the equality are legal fence text — no surprises in rendered
-#      output — validate-manifests covers semantics, this covers syntax)
+#      a config.epoch annotation line (BOTH trio sides — the pod-template
+#      annotation and the ExternalSecret metadata annotation share this
+#      pattern; they live in fence-admitted paths), or a --declared arg line
+#      (validate-manifests covers semantics, this covers syntax)
 #   5. required checks green (validate-manifests)
 #   6. the repo variable DEPLOY_AUTOMERGE is exactly "on" (absent = off)
 #
@@ -30,30 +40,55 @@ JSON=$(gh pr view "$PR" --json headRefName,labels,files --jq \
   '{head: .headRefName, labels: [.labels[].name], files: [.files[].path]}')
 HEAD=$(jq -r .head <<<"$JSON")
 [[ "$HEAD" =~ ^bump/[a-z0-9-]+-[a-z0-9._-]+$ ]] || bail "head ref '$HEAD'"
-# APP is parsed from the ref for the overlay path fence — v-tags end at the
-# first dash-less segment (bump/<app>-vX.Y.Z), legacy sha- tags at sha-
-# (bump/<app>-sha-<hex>). Ambiguous/unmatched refs simply get APP="" which
-# keeps the two GENERIC path patterns but drops the app-scoped one: the
-# fail-safe direction (fewer lines admitted), never a widening.
+# ---- branch grammar (env model, owner ruling) ------------------------------
+#   NEW     bump/<app>-<env>-<tag>       env ∈ foundation|staging|production
+#   LEGACY  bump/<app>-<tag>             ⇒ production. DEPRECATED: kept only
+#           for bump branches minted before the restructure; removal rides the
+#           same vortex env-model PR that deletes the overlays/ tree.
+#   else    BAIL. An env we cannot parse is an env we cannot fence, and the
+#           pre-grammar fallback (generic patterns, APP="") was a WIDENING —
+#           fail-safe doctrine says narrower-or-nothing, never silently wider.
+# The env alternatives are LITERALS, so the greedy first group resolves
+# "bump/lumen-staging-production-v1.0.0" as app=lumen-staging, env=production:
+# the env marker is the LAST literal before the tag.
 REF="${HEAD#bump/}"
-case "$REF" in
-  *-v[0-9]*) PR_APP="${REF%-v[0-9]*}" ;;
-  *-sha-*)   PR_APP="${REF%-sha-*}" ;;
-  *)         PR_APP="" ;;
-esac
+PR_APP="" PR_ENV="" LEGACY_BRANCH=""
+if [[ "$REF" =~ ^([a-z0-9-]+)-(foundation|staging|production)-(.+)$ ]]; then
+  PR_APP="${BASH_REMATCH[1]}"
+  PR_ENV="${BASH_REMATCH[2]}"
+else
+  # DEPRECATED legacy shapes (env implied production) — v-tags end at the
+  # first dash-less segment (bump/<app>-vX.Y.Z), sha- tags at sha-<hex>.
+  case "$REF" in
+    *-v[0-9]*) PR_APP="${REF%-v[0-9]*}"; PR_ENV=production; LEGACY_BRANCH=1 ;;
+    *-sha-*)   PR_APP="${REF%-sha-*}";  PR_ENV=production; LEGACY_BRANCH=1 ;;
+    *)         bail "cannot parse env from '$HEAD' — expected bump/<app>-<env>-<tag> (env: foundation|staging|production) or the deprecated bump/<app>-<tag>" ;;
+  esac
+fi
 jq -e '.labels | index("deploy-bump")' <<<"$JSON" >/dev/null || bail "missing label"
 FILES=$(jq -r '.files[]' <<<"$JSON")
 [ -n "$FILES" ] || bail "no files"
 while IFS= read -r f; do
+  # new model: the bump's whole world lives under its env — pin, trio, and
+  # the same-env gate lockstep stanzas. PR_ENV is regex-derived from three
+  # literals; PR_APP from [a-z0-9.-] — both safe to interpolate.
+  [[ "$f" =~ ^environments/${PR_ENV}/ ]] && continue
+  # ---- TRANSITION fence — legacy-shaped branches ONLY (a new-grammar
+  # staging/foundation branch must never touch the shared base or the
+  # production overlay). Delete with the overlays/ tree (vortex env-model
+  # PR); until then these are the pre-restructure pin/lockstep/pair paths.
+  [ -n "$LEGACY_BRANCH" ] || bail "path $f outside the fence for env '$PR_ENV'"
   [[ "$f" =~ ^applications/[a-z0-9-]+/kustomization\.yaml$ ]] && continue
   [[ "$f" =~ ^overlays/production/[a-z0-9-]+/kustomization\.yaml$ ]] && continue
-  [ -n "$PR_APP" ] && [[ "$f" =~ ^overlays/production/${PR_APP}/.*\.yaml$ ]] && continue
+  [[ "$f" =~ ^overlays/production/${PR_APP}/.*\.yaml$ ]] && continue
   bail "path $f outside the fence"
 done <<<"$FILES"
 
-# line fence: allow only images: stanza + epoch-pair syntax in added/removed
-# lines — the pair's two sides are fence-legal BY PATTERN (config.epoch /
-# --declared), never by app or file enumeration
+# line fence: allow only images: stanza + epoch-trio syntax in added/removed
+# lines — every side of the trio is fence-legal BY PATTERN (config.epoch
+# covers the pod-template AND the ExternalSecret metadata annotation — same
+# line shape, different fence-admitted file; --declared is the gate arg),
+# never by app or file enumeration
 while IFS= read -r line; do
   case "$line" in
     '+++'*|'---'*|'@@'*|'diff '*|'index '*) continue ;;
