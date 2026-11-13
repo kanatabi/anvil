@@ -75,9 +75,19 @@ if [ "$FINAL" != "SUCCESS" ]; then
   bail "validate-manifests not green (${FINAL:-<no terminal verdict in 15min>})"
 fi
 
-# kill switch — repo variable, absent means OFF
-VAL=$(gh api "repos/${GITHUB_REPOSITORY:?}/actions/variables/DEPLOY_AUTOMERGE" --jq .value 2>/dev/null || echo "")
-[ "$VAL" = "on" ] || bail "DEPLOY_AUTOMERGE='${VAL:-<absent>}' — switch is off by design"
+# kill switch — read from ENV: the workflow passes vars.DEPLOY_AUTOMERGE.
+# 2026-11-13 lesson (PR #8): GITHUB_TOKEN CANNOT read the variables API —
+# 403 "Resource not accessible by integration" is BY DESIGN; the `vars`
+# context inside the workflow is the only door. Env wins; the API fallback
+# exists for manual runs with a real token, and its output is SANITIZED —
+# only the literal on/off counts; error bodies (even JSON ones) mean
+# ABSENT, never a verdict. Absent = off: fail-safe doctrine unchanged.
+VAL="${DEPLOY_AUTOMERGE:-}"
+if [ -z "$VAL" ]; then
+  RESP=$(gh api "repos/${GITHUB_REPOSITORY:?}/actions/variables/DEPLOY_AUTOMERGE" --jq .value 2>/dev/null || echo "")
+  case "$RESP" in on|off) VAL="$RESP" ;; *) VAL="" ;; esac
+fi
+[ "$VAL" = "on" ] || bail "DEPLOY_AUTOMERGE='${VAL:-<absent>}' — switch is off by design (workflow should pass vars.DEPLOY_AUTOMERGE; absent or unreadable = off)"
 
 say "guards GREEN — merging #$PR (squash)"
 [ -n "$DRY" ] && { say "dry-run, not merged"; exit 0; }
