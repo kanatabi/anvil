@@ -9,8 +9,13 @@ description: >
   never writes to vortex.
 inputs:
   app:
-    description: short image name (lumen|earendil|mellon) — also the vortex dir
+    description: short image name (lumen|earendil|mellon) — also the vortex app dir
     required: true
+  env:
+    description: >
+      Target environment: foundation|staging|production — which
+      environments/<env>/<app>/ overlay and branch grammar the plan rehearses.
+    default: production
   tag:
     description: release tag being proposed (vX.Y.Z)
     required: true
@@ -20,10 +25,11 @@ inputs:
   config-epoch:
     description: >
       Optional non-negative integer; when set, the plan rehearses the epoch
-      pair flip too — the bump PR may carry the epoch pair
-      (omicron/config.epoch + the gate's --declared arg) in lockstep, so
-      read THIS evidence before approving the open step that carries it.
-      Empty = image-only bump (gate-image lockstep still rides).
+      trio flip too — the bump PR may carry the trio (pod-template
+      omicron/config.epoch + the gate's --declared arg + the ExternalSecret's
+      omicron/config.epoch annotation) in lockstep, so read THIS evidence
+      before approving the open step that carries it.
+      Empty = image-only bump (same-env image lockstep still rides).
     default: ""
 runs:
   using: composite
@@ -32,6 +38,7 @@ runs:
       shell: bash
       env:
         VORTEX_BOT_PAT: ${{ inputs.vortex-bot-pat }}
+        ENVIRONMENT: ${{ inputs.env }}
         CONFIG_EPOCH: ${{ inputs.config-epoch }}
       run: |
         set -o pipefail   # a failed plan must go RED through tee, not green
@@ -39,6 +46,7 @@ runs:
         [ -n "$CONFIG_EPOCH" ] && ARGS+=(--config-epoch "$CONFIG_EPOCH")
         bash "$GITHUB_ACTION_PATH/../../bin/set-image-pr.sh" \
           --app "${{ inputs.app }}" \
+          --env "$ENVIRONMENT" \
           --image "ghcr.io/${GITHUB_REPOSITORY_OWNER}/${{ inputs.app }}" \
           --tag "${{ inputs.tag }}" \
           "${ARGS[@]+"${ARGS[@]}"}" \
