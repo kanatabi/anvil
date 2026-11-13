@@ -53,21 +53,27 @@ done < <(gh pr diff "$PR")
 # moment the PR opens, before validate-manifests even exists as a check-run.
 # An empty list once meant "no required checks, proceed" — it also meant
 # "checks not yet created", i.e. merge blind.
-# v2 (2026-11-13, pre-enable audit): the first fix broke EARLY — any non-empty
-# state (IN_PROGRESS!) exited the loop and then failed the SUCCESS test, so
-# the guard would have bailed on every PR forever. Now: poll until the check
-# reaches a TERMINAL state, only SUCCESS satisfies, anything else (or a
-# timeout with no terminal verdict) hands the PR to humans.
-DEADLINE=$((SECONDS + 600))
+# v3 (first auto-merge in anger, PR #7): the NAME CONTRACT was the bug —
+# a check-run is named after the JOB, and vortex's job id was `validate`,
+# so select(.name=="validate-manifests") matched NOTHING, forever. The v1
+# fail-open bug had been masking it (empty meant proceed!) — fixing the
+# masking exposed the mismatch. Accept both forms (runs created before the
+# workflow gained an explicit name still say `validate`), raise the budget
+# to 15min, and on bail DUMP the observed checks — name-contract failures
+# must be self-diagnosing, not archaeology.
+DEADLINE=$((SECONDS + 900))
 FINAL=""
 while [ $SECONDS -lt $DEADLINE ]; do
-  STATUSES=$(gh pr checks "$PR" --json name,state --jq '[.[] | select(.name=="validate-manifests") | .state] | @tsv' 2>/dev/null || echo "")
+  STATUSES=$(gh pr checks "$PR" --json name,state --jq '[.[] | select(.name=="validate-manifests" or .name=="validate") | .state] | @tsv' 2>/dev/null || echo "")
   case "$STATUSES" in
     ""|*PENDING*|*QUEUED*|*IN_PROGRESS*) sleep 15 ;;
     *) FINAL="$STATUSES"; break ;;
   esac
 done
-[ "$FINAL" = "SUCCESS" ] || bail "validate-manifests not green (${FINAL:-<no terminal verdict in 10min>})"
+if [ "$FINAL" != "SUCCESS" ]; then
+  say "observed checks: $(gh pr checks "$PR" --json name,state --jq '[.[]|"\(.name)=\(.state)"]|join(" ")' 2>/dev/null)"
+  bail "validate-manifests not green (${FINAL:-<no terminal verdict in 15min>})"
+fi
 
 # kill switch — repo variable, absent means OFF
 VAL=$(gh api "repos/${GITHUB_REPOSITORY:?}/actions/variables/DEPLOY_AUTOMERGE" --jq .value 2>/dev/null || echo "")
