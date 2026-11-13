@@ -16,7 +16,9 @@
 #              emergency only — a bump PR that cannot render is a lie).
 #
 #   env: VORTEX_BOT_PAT  fine-grained PAT scoped to kanatabi/vortex (clone is
-#        PAT-authenticated: the repo is PRIVATE, anonymous https clone 404s)
+#        PAT-authenticated because the push and the PR need the credentials
+#        anyway; vortex went public 2026-11-13 so an anonymous https clone
+#        would work too — the PAT-clone behaves identically for any visibility)
 #        VORTX           local clone path for --dry-run (and offline --plan tests)
 set -uo pipefail
 

@@ -2,9 +2,10 @@ name: deploy-bump
 description: >
   Open (or reuse) the vortex deploy-bump PR pinning an ALREADY-PUSHED image
   tag — bin/set-image-pr.sh is the only mechanism that moves a deployed
-  version. kanatabi/vortex is PRIVATE, so the clone rides VORTEX_BOT_PAT;
-  the token is passed through env and never logged. Release-only doctrine:
-  pass the vX.Y.Z tag, never an alias.
+  version. The clone rides VORTEX_BOT_PAT because the push and the PR need it
+  (vortex has been public since 2026-11-13 — the clone would work anonymous,
+  the open step would not); the token is passed through env and never logged.
+  Release-only doctrine: pass the vX.Y.Z tag, never an alias.
 inputs:
   app:
     description: short image name (lumen|earendil|mellon) — also the vortex dir
