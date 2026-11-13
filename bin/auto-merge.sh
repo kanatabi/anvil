@@ -6,9 +6,15 @@
 #
 #   1. head ref matches bump/<app>-<tag>
 #   2. label deploy-bump present
-#   3. every changed file is applications/<app>/kustomization.yaml
-#   4. every changed LINE is inside the images: block (no surprises in
-#      rendered output — validate-manifests covers semantics, this covers syntax)
+#   3. every changed file is inside the FENCE OF PATTERNS (never of app
+#      names): applications/<any>/kustomization.yaml (the pin), the
+#      overlays/production/<any>/kustomization.yaml stanzas (gate-image
+#      lockstep), or any *.yaml under overlays/production/<app>/ — the app
+#      parsed from the head ref — (the epoch pair lives in those files)
+#   4. every changed LINE is fence-legal syntax: inside the images: block, or
+#      a config.epoch annotation line, or a --declared arg line (both sides
+#      of the equality are legal fence text — no surprises in rendered
+#      output — validate-manifests covers semantics, this covers syntax)
 #   5. required checks green (validate-manifests)
 #   6. the repo variable DEPLOY_AUTOMERGE is exactly "on" (absent = off)
 #
@@ -24,20 +30,38 @@ JSON=$(gh pr view "$PR" --json headRefName,labels,files --jq \
   '{head: .headRefName, labels: [.labels[].name], files: [.files[].path]}')
 HEAD=$(jq -r .head <<<"$JSON")
 [[ "$HEAD" =~ ^bump/[a-z0-9-]+-[a-z0-9._-]+$ ]] || bail "head ref '$HEAD'"
+# APP is parsed from the ref for the overlay path fence — v-tags end at the
+# first dash-less segment (bump/<app>-vX.Y.Z), legacy sha- tags at sha-
+# (bump/<app>-sha-<hex>). Ambiguous/unmatched refs simply get APP="" which
+# keeps the two GENERIC path patterns but drops the app-scoped one: the
+# fail-safe direction (fewer lines admitted), never a widening.
+REF="${HEAD#bump/}"
+case "$REF" in
+  *-v[0-9]*) PR_APP="${REF%-v[0-9]*}" ;;
+  *-sha-*)   PR_APP="${REF%-sha-*}" ;;
+  *)         PR_APP="" ;;
+esac
 jq -e '.labels | index("deploy-bump")' <<<"$JSON" >/dev/null || bail "missing label"
 FILES=$(jq -r '.files[]' <<<"$JSON")
 [ -n "$FILES" ] || bail "no files"
 while IFS= read -r f; do
-  [[ "$f" =~ ^applications/[a-z0-9-]+/kustomization\.yaml$ ]] || bail "path $f outside the fence"
+  [[ "$f" =~ ^applications/[a-z0-9-]+/kustomization\.yaml$ ]] && continue
+  [[ "$f" =~ ^overlays/production/[a-z0-9-]+/kustomization\.yaml$ ]] && continue
+  [ -n "$PR_APP" ] && [[ "$f" =~ ^overlays/production/${PR_APP}/.*\.yaml$ ]] && continue
+  bail "path $f outside the fence"
 done <<<"$FILES"
 
-# line fence: allow only images: stanza syntax in added/removed lines
+# line fence: allow only images: stanza + epoch-pair syntax in added/removed
+# lines — the pair's two sides are fence-legal BY PATTERN (config.epoch /
+# --declared), never by app or file enumeration
 while IFS= read -r line; do
   case "$line" in
     '+++'*|'---'*|'@@'*|'diff '*|'index '*) continue ;;
     '+'*|'-'*)
       body=${line#?}
       [[ "$body" =~ ^[[:space:]]*$ ]] && continue
+      [[ "$body" == *config.epoch* ]] && continue      # annotation side of the pair
+      [[ "$body" == *--declared* ]] && continue        # arg side of the pair
       [[ "$body" =~ ^images:[[:space:]]* ]] && continue
       [[ "$body" =~ ^-[[:space:]]+(name|newName|newTag):[[:space:]]*[^[:space:]] ]] && continue
       # canonical kustomize emits the continuation keys INDENTED, not as list

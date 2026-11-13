@@ -16,6 +16,14 @@ inputs:
   vortex-bot-pat:
     description: the VORTEX_BOT_PAT secret, passed through — never logged
     default: ""
+  config-epoch:
+    description: >
+      Optional non-negative integer. When the deployed config version moves,
+      the bump PR may carry the epoch pair (omicron/config.epoch annotation +
+      the gate's --declared arg) in lockstep: set it here and the PR flips
+      BOTH sides plus the gate-image pins in one commit. Empty = image-only
+      bump (lockstep still rides — the pair stays as-is).
+    default: ""
 runs:
   using: composite
   steps:
@@ -25,8 +33,12 @@ runs:
         VORTEX_BOT_PAT: ${{ inputs.vortex-bot-pat }}
         APP: ${{ inputs.app }}
         TAG: ${{ inputs.tag }}
+        CONFIG_EPOCH: ${{ inputs.config-epoch }}
       run: |
+        ARGS=()
+        [ -n "$CONFIG_EPOCH" ] && ARGS+=(--config-epoch "$CONFIG_EPOCH")
         bash "$GITHUB_ACTION_PATH/../../bin/set-image-pr.sh" \
           --app "$APP" \
           --image "ghcr.io/${GITHUB_REPOSITORY_OWNER}/${APP}" \
-          --tag "$TAG"
+          --tag "$TAG" \
+          "${ARGS[@]+"${ARGS[@]}"}"

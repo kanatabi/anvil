@@ -17,6 +17,14 @@ inputs:
   vortex-bot-pat:
     description: the VORTEX_BOT_PAT secret, passed through — never logged
     required: true
+  config-epoch:
+    description: >
+      Optional non-negative integer; when set, the plan rehearses the epoch
+      pair flip too — the bump PR may carry the epoch pair
+      (omicron/config.epoch + the gate's --declared arg) in lockstep, so
+      read THIS evidence before approving the open step that carries it.
+      Empty = image-only bump (gate-image lockstep still rides).
+    default: ""
 runs:
   using: composite
   steps:
@@ -24,10 +32,14 @@ runs:
       shell: bash
       env:
         VORTEX_BOT_PAT: ${{ inputs.vortex-bot-pat }}
+        CONFIG_EPOCH: ${{ inputs.config-epoch }}
       run: |
         set -o pipefail   # a failed plan must go RED through tee, not green
+        ARGS=()
+        [ -n "$CONFIG_EPOCH" ] && ARGS+=(--config-epoch "$CONFIG_EPOCH")
         bash "$GITHUB_ACTION_PATH/../../bin/set-image-pr.sh" \
           --app "${{ inputs.app }}" \
           --image "ghcr.io/${GITHUB_REPOSITORY_OWNER}/${{ inputs.app }}" \
           --tag "${{ inputs.tag }}" \
+          "${ARGS[@]+"${ARGS[@]}"}" \
           --plan | tee "$GITHUB_STEP_SUMMARY"
