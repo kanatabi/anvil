@@ -165,10 +165,25 @@ for d in "${dirs[@]}"; do
       { echo "FAIL shape $d — renders an ExternalSecret + Deployment but no envFrom consumes it"; fail=1; }
   fi
 
-  # ---- class 3: migrate hook, name-free ----
+  # ---- class 3: migrate + secrets-before-workloads (the wave contract) ----
+  # Old shape (PreSync hook) walked into a fresh-cluster deadlock (2026-11-14):
+  # hooks run before the sync applies the app's own ES, so the migrate could
+  # never see its Secret. New shape: ES (wave 0) -> migrate (wave 1) ->
+  # Deployments (wave 2) — Argo holds wave N until wave N-1 is Healthy, so
+  # schema still gates deploy and no workload ever boots dark.
+  if printf '%s\n' "$out" | grep -q '^kind: ExternalSecret'; then
+    dep=$(printf '%s\n' "$out" | grep -c '^kind: Deployment$')
+    waved=$(printf '%s\n' "$out" | grep -c 'argocd.argoproj.io/sync-wave: "[1-9]')
+    [ "$dep" -le "$waved" ] ||
+      { echo "FAIL hook $d — render ships an ES but a Deployment carries no sync-wave (dark-boot risk: envFrom binds once, at container start)"; fail=1; }
+  fi
   if find "$d" -maxdepth 2 -iname '*migrate*' -print 2>/dev/null | grep -q .; then
-    printf '%s\n' "$out" | grep -q 'argocd.argoproj.io/hook: PreSync' ||
-      { echo "FAIL hook $d — dir ships a *migrate* file but the PreSync hook is gone"; fail=1; }
+    printf '%s\n' "$out" | grep -q 'argocd.argoproj.io/sync-wave: "1"' ||
+      { echo "FAIL hook $d — dir ships a *migrate* file but it does not ride sync-wave 1 (after the ES, before the workloads)"; fail=1; }
+    dep=$(printf '%s\n' "$out" | grep -c '^kind: Deployment$')
+    w2=$(printf '%s\n' "$out" | grep -c 'argocd.argoproj.io/sync-wave: "2"')
+    [ "$dep" -eq "$w2" ] ||
+      { echo "FAIL hook $d — migrate ships but not every Deployment rides sync-wave 2 (schema must gate deploy)"; fail=1; }
   fi
 
   # ---- class 4: epoch TRIO consistency ----
