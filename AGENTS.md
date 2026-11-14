@@ -403,3 +403,12 @@ no drift class introduced. Rejected at this scale: terraform-provider-github
 (plaintext secret values in state for a 5-repo problem); full org migration
 (Path 2 — clean but re-walks every URL, the ghcr namespace, and every pin;
 revisit only for a second maintainer or >10 repos).
+
+## 10. Context sync (workspace rule, 2026-11-15)
+
+Changes that alter the scripts, actions, contracts, or state update the
+vault's learning note in the SAME round: `omicron` →
+`context-knowledge/repos/anvil/README.md` (+ its `LEARNING.md` if the
+change minted a lesson — anvil mints them often; + the runbook when
+operational). "The tooling landed but the vault didn't" is an incomplete
+round — the checklist lives at the end of that note.
