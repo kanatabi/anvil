@@ -106,7 +106,7 @@ while IFS= read -r line; do
       # items — newName/newTag exist only under images:, so these two names are
       # still fence-safe (a `name:` key lives elsewhere too; it stays list-only)
       [[ "$body" =~ ^[[:space:]]+(newName|newTag):[[:space:]]*[^[:space:]] ]] && continue
-      [[ "$body" =~ ^[[:space:]]#.* ]] && continue   # comment changes allowed
+      [[ "$body" =~ ^[[:space:]]*#.* ]] && continue   # comment changes allowed (ANY indent — walked: 4-space comments inside patches bailed a legit bump)
       bail "line outside images: block: $body" ;;
   esac
 done < <(gh pr diff "$PR")

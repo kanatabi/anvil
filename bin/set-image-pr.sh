@@ -109,6 +109,14 @@ echo "=========================="
 cd "$TARGET"
 command -v kustomize >/dev/null || { echo "kustomize binary required (runners ship it; locally: install v5.x)"; exit 1; }
 kustomize edit set image "${APP}=${IMAGE}:${TAG}" || { echo "kustomize edit FAILED"; exit 1; }
+# kustomize edit's round-trip can DUPLICATE a comment attached to a list item
+# (walked 2026-11-14: the full-args-replacement note emitted twice, and the
+# fence rightly refused the PR). Drop an exact-duplicate comment line that
+# directly follows its twin:
+for f in ./kustomization.yaml ./*/kustomization.yaml; do
+  [ -f "$f" ] || continue
+  awk 'BEGIN{prev=""} { if ($0 ~ /^[[:space:]]*#/ && $0 == prev) next; print; prev=$0 }' "$f" > "$f.tmp" && mv "$f.tmp" "$f"
+done
 cd "$WORK"
 
 # ---- app-image LOCKSTEP (rides EVERY bump): every `name: ${APP}` images
