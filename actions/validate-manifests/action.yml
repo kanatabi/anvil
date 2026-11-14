@@ -1,7 +1,9 @@
 name: validate-manifests
 description: >
-  Build every vortex kustomize dir, assert the kind-count table + config-shape
-  + migrate-hook invariants, and print the RENDERED diff against the base ref.
+  Build every vortex kustomize dir, assert the rendered-loss baseline (every
+  doc at the merge-base must survive at HEAD — derived at run time, no stored
+  table) + config-shape + wave/epoch-trio invariants, and print the RENDERED
+  diff against the base ref.
 inputs:
   base-ref:
     description: ref to diff against (rendered diff is informational; pass/fail is the table)
