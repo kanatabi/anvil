@@ -305,7 +305,30 @@ fi
 if [ -n "$DRY" ]; then echo "DRY-RUN: branch $BRANCH prepared in $WORK — nothing pushed"; exit 0; fi
 
 if [ -z "$URL" ]; then
-  git push -q "https://vortex-bot-ci:${VORTEX_BOT_PAT}@github.com/kanatabi/vortex.git" "$BRANCH"
+  # ---- PUSH, with bounded retry ----------------------------------------------
+  # Walked 2026-11-14 (lumen staging v4.0.2): GitHub can transiently reject a
+  # push — `! [remote rejected] <ref> (failed)` with EMPTY remote: lines, no
+  # rulesets on the repo (API-verified []), and same-PAT sibling pushes from
+  # the same run succeeding minutes apart. One push in ~9 that day. Retry,
+  # and on final failure RED with the RAW git error: the recovery is a
+  # workflow_dispatch re-run of this env (transients don't repeat), and a
+  # vague message sends the human debugging the wrong machine.
+  PUSH_URL="https://vortex-bot-ci:${VORTEX_BOT_PAT}@github.com/kanatabi/vortex.git"
+  PUSHED=""
+  for ATTEMPT in 1 2 3; do
+    if ERR=$(git push "$PUSH_URL" "$BRANCH" 2>&1); then
+      PUSHED=1; break
+    fi
+    echo "push attempt ${ATTEMPT}/3 failed:" >&2
+    printf '%s\n' "$ERR" | sed 's/^/  /' >&2
+    [ "$ATTEMPT" -lt 3 ] && { echo "retrying in 15s…"; sleep 15; }
+  done
+  [ -n "$PUSHED" ] || {
+    echo "set-image-pr: PUSH FAILED after 3 attempts — bump branch $BRANCH is NOT on GitHub; the pin is NOT on vortex main. Recovery: re-run this env's deploy (workflow_dispatch) — GitHub-side transient rejections do not repeat. Raw error above." >&2
+    sum ""
+    sum "❌ **push failed after 3 attempts** — bump branch \`$BRANCH\` never landed on GitHub; the pin is **NOT** on vortex main. Raw git error in the job log. Recovery: workflow_dispatch re-run of this environment."
+    exit 1
+  }
   export GH_TOKEN="$VORTEX_BOT_PAT"
   gh label create deploy-bump --repo kanatabi/vortex --color 7CFC8A \
     --description "automated image bump — auto-merge eligible" >/dev/null 2>&1 || true
@@ -318,9 +341,22 @@ if [ -z "$URL" ]; then
   fi
   PR_BODY+=$'\n'"Rendered validation ran BEFORE this PR opened (anvil deploy-plan/deploy gates, incl. epoch-trio consistency)."
   PR_BODY+=$'\n'"Merges automatically iff DEPLOY_AUTOMERGE=on and validate-manifests is green."
-  URL=$(gh pr create --repo kanatabi/vortex --base main --head "$BRANCH" \
-    --title "$PR_TITLE" --label deploy-bump --body "$PR_BODY")
+  # The create is GUARDED — walked 2026-11-14: a transient push rejection left
+  # `gh pr create` failing with `GraphQL: Head sha can't be blank…`, and the
+  # unguarded script then polled a NONEXISTENT PR for the full await deadline,
+  # RED-ing with a misleading "did not merge" when the truth was "PR was never
+  # created". Fail NOW, with the true state and its distinct recovery.
+  if ! URL=$(gh pr create --repo kanatabi/vortex --base main --head "$BRANCH" \
+      --title "$PR_TITLE" --label deploy-bump --body "$PR_BODY"); then
+    echo "set-image-pr: PR CREATION FAILED — the bump branch IS pushed to GitHub, but NO PR exists (raw gh error above). Recovery: open the PR by hand, or workflow_dispatch re-run of this env (it dedupes: reuse, not duplicate)." >&2
+    sum ""
+    sum "❌ **PR creation failed** — branch \`$BRANCH\` IS on GitHub; **no PR exists**. Open it by hand or workflow_dispatch re-run of this environment (the run dedupes by branch)."
+    exit 1
+  fi
 fi
+# The await loop must never run with an empty URL — polling a nonexistent PR
+# burns the whole deadline and REDs with the wrong story.
+[ -n "$URL" ] || { echo "set-image-pr: no PR URL — refusing to await a PR that does not exist" >&2; exit 1; }
 echo "bump PR: $URL"
 
 # ---- AWAIT THE MERGE: the deploy job's green must mean the pin LANDED ----
