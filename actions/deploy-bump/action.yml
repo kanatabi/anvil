@@ -5,7 +5,10 @@ description: >
   version. The clone rides VORTEX_BOT_PAT because the push and the PR need it
   (vortex has been public since 2026-11-13 — the clone would work anonymous,
   the open step would not); the token is passed through env and never logged.
-  Release-only doctrine: pass the vX.Y.Z tag, never an alias.
+  Release-only doctrine: pass the vX.Y.Z tag, never an alias. The job then
+  AWAITS THE MERGE (bounded poll, default 30 min): green here means the pin
+  LANDED on vortex main — the merge rides vortex's own auto-merge workflow,
+  so "PR opened" alone was never evidence.
 inputs:
   app:
     description: short image name (lumen|earendil|mellon) — also the vortex app dir

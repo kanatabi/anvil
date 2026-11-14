@@ -1,13 +1,29 @@
 #!/usr/bin/env bash
-# validate-all.sh — the truth table for vortex manifests.
+# validate-all.sh — the truth battery for vortex manifests.
 #
 # Builds EVERY kustomize dir with kustomize (helm enabled — the ESO wrapper
-# needs it), then asserts four classes of facts the estate's history paid for:
-#   1. kind counts (the empty-base bug built successfully and rendered NOTHING;
-#      exit-0 is not evidence — a table of expected counts is);
-#   2. config shape, STRUCTURAL rules over the RENDERED output — never keyed on
-#      dir or service names (the old case-statement folklore named every app
-#      and silently skipped every app it didn't name):
+# needs it), then asserts classes of fact the estate's history paid for:
+#   1. RENDERED-LOSS BASELINE (stateless — the expectation is DERIVED at run
+#      time, never stored): render every dir at HEAD and at the MERGE-BASE
+#      with the base ref, and assert every doc present at the base
+#      (apiVersion/kind/namespace/name) is still present at HEAD. Why: the
+#      empty-base bug built successfully and rendered NOTHING (exit-0 is not
+#      evidence), and a silently dropped doc in a pruned sync is a LIVE
+#      DELETION — every Application CR carries prune:true. Additions are INFO
+#      (review-visible, never blocking — growth is a review question, loss is
+#      an incident). Dirs with a vendored charts/ subtree are REPORT-ONLY for
+#      losses: doc churn is legitimate when a pinned chart version moves.
+#      When no baseline resolves (no base ref; shallow clone, no network)
+#      the fallback assertion is: a render must not be EMPTY — silence is
+#      the empty-base bug's voice. This replaces the stored kind-count table
+#      (bin/expected-kinds.txt, retired 2026-11-14): a stored snapshot made
+#      anvil's SHA a four-repo coordination point and aged into phantom
+#      MISSING reds; the merge-base baseline is always current, and a
+#      name-level diff even catches same-count substitutions a count table
+#      cannot see.
+#   2. config shape, STRUCTURAL rules over the RENDERED output — never keyed
+#      on dir or service names (the old case-statement folklore named every
+#      app and silently skipped every app it didn't name):
 #        a. any rendered Deployment doc must carry ZERO inline config literals
 #           (value: http://…, *.svc.cluster.local…, x-forwarded values — the
 #           doctrine says everything lives in Bao, mounted via envFrom);
@@ -15,10 +31,10 @@
 #           its resources (the Secret ESO materializes must actually be
 #           consumed — a Deployment reading it env-by-env is the bug this
 #           catches);
-#   3. the PreSync migrate hook: generic and name-free — if the DIR contains a
-#      file matching *migrate*, its rendered output must carry
-#      'argocd.argoproj.io/hook: PreSync' (schema-gates-deploy, owner ruling
-#      2026-11-11, de-folklorized 2026-11-13);
+#   3. the wave contract: ES (wave 0) -> migrate (wave 1) -> Deployments
+#      (wave 2), asserted from the RENDERED sync-waves — generic and
+#      name-free (if the DIR contains a file matching *migrate*, the render
+#      must ride the wave order; schema gates deploy, nothing boots dark);
 #   4. EPOCH TRIO CONSISTENCY (config-gate pair rule, grown to a TRIO by the
 #      env-model ruling): the epoch is THREE values per dir —
 #        P  omicron/config.epoch on the pod templates   (Deployment docs)
@@ -35,42 +51,105 @@
 # node use in this script stays the `npx --yes js-yaml` FALLBACK for raw-CR
 # parse checks (skipped when neither js-yaml nor node are present).
 #
-#   usage: validate-all.sh [vortex-path] [--update]
-#          --update regenerates bin/expected-kinds.txt from reality — a PR
-#          that legitimately changes manifests MUST carry its table update.
+#   usage: validate-all.sh [vortex-path] [--base <ref>]
+#          --base <ref>  derive the baseline from THIS ref (default:
+#                        origin/main, then main; neither resolvable ->
+#                        baseline-less mode). The MERGE-BASE with HEAD is
+#                        used, never the ref tip — main may have moved.
 set -uo pipefail
 
 VORTEX="."
-UPDATE=""
-for a in "$@"; do
-  case "$a" in
-    --update) UPDATE=1 ;;
-    *) VORTEX="$a" ;;
+BASE_REF=""
+while [ $# -gt 0 ]; do
+  case "$1" in
+    --base) BASE_REF="$2"; shift 2 ;;
+    *) VORTEX="$1"; shift ;;
   esac
 done
-TABLE="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)/expected-kinds.txt"
 
 command -v kubectl >/dev/null || { echo "kubectl required (provides kustomize)"; exit 2; }
 HELM_OK=$(command -v helm >/dev/null 2>&1 && echo 1 || echo 0)
 
 cd "$VORTEX"
 
-# Dir discovery must survive folder reorgs: enumerate the known roots (bases,
-# the env-model environments/<env>/<app> tree, the legacy overlays/<env>/<app>
-# tree, and the apps/ tree in case bases ever move under the hub split) — a
-# candidate only counts when it holds a kustomization.yaml. The overlays/ glob
-# is TRANSITION (drop when the vortex env-model PR deletes the tree); both
-# globs are env-agnostic — no environment name appears here, and a pattern for
-# a tree that doesn't (yet) exist simply expands to nothing. Deliberately NOT
-# a repo-wide find: platform/ (remote-pinned vendor manifests) and nested
-# sub-kustomizations are not in the validated set by contract, and the table
-# keys pin the exact dir names anyway (UNLISTED/MISSING catch drift).
-dirs=()
-for d in bases/*/ environments/*/*/ overlays/*/*/ apps/*/; do
-  [ -f "$d/kustomization.yaml" ] && dirs+=("$d")
-done
-# helm-free fast path when the ESO wrapper is not in scope? no — silence IS the
-# empty-base bug's voice; if helm is missing, dirs needing it FAIL, loudly.
+# ---- baseline resolution -----------------------------------------------------
+# A shallow checkout (actions/checkout depth 1) cannot compute a merge-base;
+# self-heal by unshallowing when we can, and fall back to baseline-less mode
+# when we can't — loudly noted, with the non-empty-render floor below.
+if [ -f .git/shallow ]; then
+  git fetch --unshallow -q origin 2>/dev/null || true
+fi
+[ -n "$BASE_REF" ] || BASE_REF=origin/main
+if ! git rev-parse --verify -q "$BASE_REF" >/dev/null 2>&1; then
+  [ -n "$(git remote 2>/dev/null)" ] && git fetch -q origin 2>/dev/null || true
+fi
+BASE_COMMIT=""
+if git rev-parse --verify -q "$BASE_REF" >/dev/null 2>&1; then
+  BASE_COMMIT=$(git merge-base HEAD "$BASE_REF" 2>/dev/null || true)
+fi
+MODE="baseline-less"
+if [ -n "$BASE_COMMIT" ]; then
+  MODE="baseline($(git log -1 --format=%h "$BASE_COMMIT" 2>/dev/null || echo "$BASE_COMMIT"))"
+fi
+
+WT=""
+cleanup() { [ -n "$WT" ] && git worktree remove --force "$WT" 2>/dev/null; }
+trap cleanup EXIT
+if [ -n "$BASE_COMMIT" ]; then
+  WT=$(mktemp -d)
+  git worktree add --detach -q "$WT" "$BASE_COMMIT" || { echo "cannot check out baseline $BASE_COMMIT"; exit 2; }
+fi
+
+# ---- dir discovery must survive folder reorgs --------------------------------
+# enumerate the known roots (bases, the env-model environments/<env>/<app>
+# tree, the legacy overlays/<env>/<app> tree, and the apps/ tree) in BOTH
+# trees — a dir present at the base but gone at HEAD is exactly the
+# deleted-while-pruned deletion class, so the union is the iteration set.
+# The overlays/ glob is TRANSITION (drop when the vortex env-model PR deletes
+# the tree); both globs are env-agnostic — no environment name appears here.
+# Deliberately NOT a repo-wide find: platform/ (remote-pinned vendor
+# manifests) and nested sub-kustomizations are not in the validated set by
+# contract.
+list_dirs() { # $1 = tree root
+  (cd "$1" 2>/dev/null && {
+    for d in bases/*/ environments/*/*/ overlays/*/*/ apps/*/; do
+      [ -f "$d/kustomization.yaml" ] && printf '%s\n' "$d"
+    done
+  }) | sort -u
+}
+
+# ---- doc identity extraction (stdin: render) ---------------------------------
+# One key per rendered doc: apiVersion/kind/namespace/name — the identity a
+# pruned sync matches on. Name-level (not count-level): a remove-one-add-one
+# change keeps counts equal and would slip past a count table.
+doc_keys() {
+  awk '
+    function flushdoc() {
+      if (kind != "")
+        print av "/" kind "/" (ns == "" ? "-" : ns) "/" (nm == "" ? "-" : nm)
+      av = ""; kind = ""; ns = ""; nm = ""; inmeta = 0
+    }
+    /^---[[:space:]]*$/ { flushdoc(); next }
+    { if ($0 ~ /^apiVersion:/)      { av = $2; gsub(/"/, "", av) }
+      else if ($0 ~ /^kind:/)       { kind = $2; gsub(/"/, "", kind) }
+      else if ($0 ~ /^metadata:/)   inmeta = 1
+      else if (inmeta && nm == "" && $0 ~ /^[[:space:]]+name:/)      { nm = $2; gsub(/"/, "", nm) }
+      else if (inmeta && ns == "" && $0 ~ /^[[:space:]]+namespace:/) { ns = $2; gsub(/"/, "", ns) }
+      else if (inmeta && /^[^[:space:]#-]/) inmeta = 0
+    }
+    END { flushdoc() }
+  ' | sort
+}
+
+render_dir() { # $1 = tree root, $2 = dir -> stdout render ("" on missing), rc 0 ok / 3 missing
+  local root="$1" d="$2"
+  [ -d "$root/$d" ] || return 3
+  local need_helm=0
+  grep -q "helmCharts\|external-secrets" "$root/$d"/*.yaml 2>/dev/null && need_helm=1
+  local a=(kustomize "$d")
+  [ "$need_helm" = 1 ] && a+=(--enable-helm)
+  (cd "$root" && kubectl "${a[@]}" 2>&1)
+}
 
 # ---- class 2a: inline-config detector over Deployment docs (stdin: render) --
 # awk doc-splits on ^---$ and flags value: lines carrying URL/forwarding
@@ -138,30 +217,67 @@ extract_epoch_trio() {
   '
 }
 
-declare -A got
 fail=0
 # render values for FAIL messages: one-line bracketed lists
 fmt() { printf '[%s]' "$(printf '%s' "$1" | tr '\n' ' ' | sed 's/ $//')"; }
-for d in "${dirs[@]}"; do
-  # dir text mentioning the chart wrapper or helmCharts ⇒ the build needs --enable-helm
-  need_helm=0
-  grep -q "helmCharts\|external-secrets" "$d"/*.yaml 2>/dev/null && need_helm=1
-  if [ "$need_helm" = 1 ] && [ "$HELM_OK" = 0 ]; then
-    echo "FAIL $d — requires helm (--enable-helm); install helm v3.22.1"; fail=1; continue
+
+HEAD_ROOT="$(pwd)"
+UNION=$(printf '%s\n%s\n' "$(list_dirs "$HEAD_ROOT")" "$(list_dirs "${WT:-$HEAD_ROOT}")" | sort -u | grep -v '^$')
+ndirs=0
+while IFS= read -r d; do
+  [ -n "$d" ] || continue
+  ndirs=$((ndirs + 1))
+  head_out=$(render_dir "$HEAD_ROOT" "$d"); head_rc=$?
+  if [ "$head_rc" -ne 0 ] && [ "$head_rc" -ne 3 ]; then
+    echo "FAIL build $d"; printf '%s\n' "$head_out" | head -3; fail=1; continue
   fi
-  args=(kustomize "$d"); [ "$need_helm" = 1 ] && args+=(--enable-helm)
-  out=$(kubectl "${args[@]}" 2>&1)
-  if [ $? -ne 0 ]; then echo "FAIL build $d"; echo "$out" | head -3; fail=1; continue; fi
-  got[$d]=$(printf '%s\n' "$out" | grep -c '^kind:')
+  if [ "$head_rc" -eq 3 ]; then head_out=""; fi   # dir gone at HEAD (deleted at base? see below)
+
+  # ---- class 1: rendered-loss baseline ----
+  base_out=""
+  if [ -n "$WT" ]; then
+    base_out=$(render_dir "$WT" "$d"); base_rc=$?
+    if [ "$base_rc" -ne 0 ] && [ "$base_rc" -ne 3 ]; then
+      echo "FAIL baseline $d — base render failed; the loss comparison would be a lie"; printf '%s\n' "$base_out" | head -3; fail=1; continue
+    fi
+    if [ "$base_rc" -eq 3 ]; then base_out=""; fi
+    base_keys=$(doc_keys <<<"$base_out")
+    head_keys=$(doc_keys <<<"$head_out")
+    lost=$(comm -23 <(printf '%s\n' "$base_keys" | sed '/^$/d') <(printf '%s\n' "$head_keys" | sed '/^$/d') || true)
+    added=$(comm -13 <(printf '%s\n' "$base_keys" | sed '/^$/d') <(printf '%s\n' "$head_keys" | sed '/^$/d') || true)
+    nb=$(printf '%s\n' "$base_keys" | grep -c . || true)
+    nh=$(printf '%s\n' "$head_keys" | grep -c . || true)
+    echo "INFO count $d — rendered ${nh} docs (baseline ${nb})"
+    if [ -n "$lost" ]; then
+      if [ -d "$d/charts" ]; then
+        # vendored chart: doc churn rides the chart version bump — report, never block
+        echo "INFO chart-loss $d — vendored chart dir, doc churn report-only: $(fmt "$lost")"
+      elif [ "$head_rc" -eq 3 ]; then
+        echo "FAIL lost-dir $d — dir present at baseline, GONE at HEAD; with prune:true that is a live deletion of: $(fmt "$lost")"
+        fail=1
+      else
+        echo "FAIL lost $d — doc(s) removed by this change: $(fmt "$lost")"
+        fail=1
+      fi
+    fi
+    [ -n "$added" ] && echo "INFO added $d — $(fmt "$added")"
+  else
+    # baseline-less floor: silence is the empty-base bug's voice
+    if [ "$head_rc" -eq 3 ] || [ -z "$(doc_keys <<<"$head_out")" ]; then
+      echo "FAIL count $d — render is EMPTY (baseline-less mode: no base ref resolvable; fix --base or fetch and re-run)"; fail=1
+    else
+      echo "INFO count $d — rendered $(doc_keys <<<"$head_out" | grep -c .) docs (no baseline: loss checks skipped)"
+    fi
+  fi
 
   # ---- class 2: config shape, structural over the render ----
-  check_deployment_literals "$d" <<<"$out" || fail=1
+  check_deployment_literals "$d" <<<"$head_out" || fail=1
   # ES + Deployment in one dir ⇒ some resource must consume config via envFrom.
   # (ES-only dirs like the certificates feeds land secrets for secretRef
   # consumers in OTHER dirs — no Deployment here, no pairing to assert.)
-  if printf '%s\n' "$out" | grep -q '^kind: ExternalSecret$' &&
-     printf '%s\n' "$out" | grep -q '^kind: Deployment$'; then
-    printf '%s\n' "$out" | grep -q 'envFrom:' ||
+  if printf '%s\n' "$head_out" | grep -q '^kind: ExternalSecret$' &&
+     printf '%s\n' "$head_out" | grep -q '^kind: Deployment$'; then
+    printf '%s\n' "$head_out" | grep -q 'envFrom:' ||
       { echo "FAIL shape $d — renders an ExternalSecret + Deployment but no envFrom consumes it"; fail=1; }
   fi
 
@@ -171,17 +287,17 @@ for d in "${dirs[@]}"; do
   # never see its Secret. New shape: ES (wave 0) -> migrate (wave 1) ->
   # Deployments (wave 2) — Argo holds wave N until wave N-1 is Healthy, so
   # schema still gates deploy and no workload ever boots dark.
-  if printf '%s\n' "$out" | grep -q '^kind: ExternalSecret'; then
-    dep=$(printf '%s\n' "$out" | grep -c '^kind: Deployment$')
-    waved=$(printf '%s\n' "$out" | grep -c 'argocd.argoproj.io/sync-wave: "[1-9]')
+  if printf '%s\n' "$head_out" | grep -q '^kind: ExternalSecret'; then
+    dep=$(printf '%s\n' "$head_out" | grep -c '^kind: Deployment$')
+    waved=$(printf '%s\n' "$head_out" | grep -c 'argocd.argoproj.io/sync-wave: "[1-9]')
     [ "$dep" -le "$waved" ] ||
       { echo "FAIL hook $d — render ships an ES but a Deployment carries no sync-wave (dark-boot risk: envFrom binds once, at container start)"; fail=1; }
   fi
   if find "$d" -maxdepth 2 -iname '*migrate*' -print 2>/dev/null | grep -q .; then
-    printf '%s\n' "$out" | grep -q 'argocd.argoproj.io/sync-wave: "1"' ||
+    printf '%s\n' "$head_out" | grep -q 'argocd.argoproj.io/sync-wave: "1"' ||
       { echo "FAIL hook $d — dir ships a *migrate* file but it does not ride sync-wave 1 (after the ES, before the workloads)"; fail=1; }
-    dep=$(printf '%s\n' "$out" | grep -c '^kind: Deployment$')
-    w2=$(printf '%s\n' "$out" | grep -c 'argocd.argoproj.io/sync-wave: "2"')
+    dep=$(printf '%s\n' "$head_out" | grep -c '^kind: Deployment$')
+    w2=$(printf '%s\n' "$head_out" | grep -c 'argocd.argoproj.io/sync-wave: "2"')
     [ "$dep" -eq "$w2" ] ||
       { echo "FAIL hook $d — migrate ships but not every Deployment rides sync-wave 2 (schema must gate deploy)"; fail=1; }
   fi
@@ -190,8 +306,8 @@ for d in "${dirs[@]}"; do
   # ANY mention of the epoch machinery in a render arms the rule; the three
   # sides must then ALL be present (absence of a side is a 2-of-3 flip — the
   # silence-is-the-bug class) and byte-equal as value SETS.
-  if printf '%s\n' "$out" | grep -q 'omicron/config.epoch\|--declared'; then
-    trio=$(extract_epoch_trio <<<"$out")
+  if printf '%s\n' "$head_out" | grep -q 'omicron/config.epoch\|--declared'; then
+    trio=$(extract_epoch_trio <<<"$head_out")
     pod=$(printf '%s\n' "$trio" | sed -n 's/^P\t//p' | sort -u)
     es=$(printf '%s\n' "$trio" | sed -n 's/^S\t//p' | sort -u)
     decl=$(printf '%s\n' "$trio" | sed -n 's/^D\t//p' | sort -u)
@@ -209,30 +325,14 @@ for d in "${dirs[@]}"; do
   # OVERLAY-MUST-REPLACE (prod would die at sync exit-2 — too late); an
   # overlay that ships the Job WITHOUT the epoch annotation passes class 4
   # vacuously — silence is exactly the bug class this battery exists to catch.
-  if printf '%s\n' "$out" | grep -q 'OVERLAY-MUST-REPLACE'; then
+  if printf '%s\n' "$head_out" | grep -q 'OVERLAY-MUST-REPLACE'; then
     echo "FAIL placeholder $d — OVERLAY-MUST-REPLACE survived into the render; the overlay must replace the gate args array wholly"; fail=1
   fi
-  if printf '%s\n' "$out" | grep -q 'name: config-gate' &&
-     ! printf '%s\n' "$out" | grep -q 'omicron/config.epoch'; then
+  if printf '%s\n' "$head_out" | grep -q 'name: config-gate' &&
+     ! printf '%s\n' "$head_out" | grep -q 'omicron/config.epoch'; then
     echo "FAIL gate-orphan $d — renders a config-gate Job with no omicron/config.epoch annotation in sight"; fail=1
   fi
-done
-
-if [ -n "$UPDATE" ]; then
-  { for d in "${!got[@]}"; do printf '%s\t%s\n' "$d" "${got[$d]}"; done; } | sort > "$TABLE"
-  echo "table updated: $(wc -l < "$TABLE") dirs"; exit 0
-fi
-
-[ -f "$TABLE" ] || { echo "no $TABLE — run validate-all.sh --update and COMMIT it"; exit 1; }
-for d in "${!got[@]}"; do
-  want=$(awk -F'\t' -v k="$d" '$1==k{print $2}' "$TABLE")
-  if [ -z "$want" ]; then echo "UNLISTED $d (count ${got[$d]}) — new dir? update the table"; fail=1
-  elif [ "$want" != "${got[$d]}" ]; then echo "COUNT $d: got ${got[$d]} want $want"; fail=1; fi
-done
-while IFS=$'\t' read -r d want; do
-  [ -z "$d" ] && continue
-  [ -n "${got[$d]:-}" ] || { echo "MISSING $d — in table, not on disk"; fail=1; }
-done < "$TABLE"
+done <<<"$UNION"
 
 # raw Application CRs are not kustomize dirs — parse-check. Globs cover the
 # env-model hub trio (apps/foundation + apps/staging + apps/production), the
@@ -248,5 +348,5 @@ for f in apps/*.yaml apps/foundation/*.yaml apps/applications/*.yaml \
   fi
 done
 
-[ "$fail" = 0 ] && echo "validate-all: ${#dirs[@]} dirs, table + shape + hooks + epoch-trio GREEN"
+[ "$fail" = 0 ] && echo "validate-all: ${ndirs} dirs, ${MODE} + shape + hooks + epoch-trio GREEN"
 exit "$fail"

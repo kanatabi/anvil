@@ -31,22 +31,28 @@ bin/
                       decline the siblings by hand.
   validate-all.sh     kustomize build of every kustomize dir (bases/,
                       environments/<env>/<app>, and the legacy overlays/ tree
-                      during the transition), kind-count assertions
-                      (expected-kinds.txt), and STRUCTURAL invariants over
-                      the RENDERED output — no dir-name folklore: zero
-                      inline config literals in Deployment docs, envFrom
-                      required wherever an ExternalSecret + Deployment
-                      coexist, PreSync hook asserted from the *migrate* FILE
-                      existing in a dir, and the EPOCH TRIO: wherever
-                      omicron/config.epoch / --declared appear in a render,
-                      ALL THREE sides (pod annotation, gate --declared, ES
-                      annotation) must EXIST and be EQUAL (half/2-of-3 flip
-                      = red). --update regenerates the table: a manifest PR
-                      MUST bring its truth update.
-  expected-kinds.txt  the assertion table. Lives HERE, reviewed like code.
-  diff-render.sh      renders every dir at two refs, emits a unified diff of
-                      the RENDERED manifests — what Argo will apply, not the
-                      YAML you wrote.
+                      during the transition), the RENDERED-LOSS BASELINE
+                      (derived at run time from the merge-base render: every
+                      doc that existed must still exist — a dropped doc in a
+                      pruned sync is a live deletion; no stored table), and
+                      STRUCTURAL invariants over the RENDERED output — no
+                      dir-name folklore: zero inline config literals in
+                      Deployment docs, envFrom required wherever an
+                      ExternalSecret + Deployment coexist, wave contract
+                      asserted from the *migrate* FILE existing in a dir, and
+                      the EPOCH TRIO: wherever omicron/config.epoch /
+                      --declared appear in a render, ALL THREE sides (pod
+                      annotation, gate --declared, ES annotation) must EXIST
+                      and be EQUAL (half/2-of-3 flip = red).
+  expected-kinds.txt  RETIRED 2026-11-14 (deleted): a stored snapshot made
+                      anvil's SHA a four-repo coordination point and aged
+                      into phantom reds; the merge-base baseline is always
+                      current and name-level (catches same-count
+                      substitutions a count table cannot see).
+  diff-render.sh      renders every dir at two refs (merge-base, so a moved
+                      main cannot produce phantom diffs), emits a unified
+                      diff of the RENDERED manifests — what Argo will apply,
+                      not the YAML you wrote.
   push-release.sh     the cascade key: push refs/tags/vX.Y.Z with
                       RELEASE_BOT_PAT (a GITHUB_TOKEN-pushed tag never
                       triggers a workflow — the silent no-deploy trap), then
@@ -301,16 +307,15 @@ match, so a base pin silently outranks every env tree). Env overlays are
 the ONLY version homes; same-env lockstep is therefore complete, not
 merely fence-convenient.
 
-> TABLE STATUS (CONVERGED 2026-11-13): `bin/expected-kinds.txt` was
-> regenerated against the converged environments/ main (anvil merge
-> 9ead865 — 23 dirs; overlays/* rows retired, environments/* landed,
-> `applications/certificates/` 5→7). The env-model cutover also REMOVED
-> the base image stanzas (vortex 01937c2 — kustomize base-outranks-overlay
-> semantics made per-env pinning impossible otherwise), which is
-> kind-invariant: the table needed no follow-up. The lesson stands: while
-> sibling manifest PRs are mid-flight, do NOT one-shot `--update` — it
-> would freeze a transient reality; regenerate against the converged main
-> and ship the refresh in its own reviewed commit.
+> TABLE RETIRED (2026-11-14): `bin/expected-kinds.txt` is gone — the truth
+> table lived in anvil but described vortex, so every count-changing manifest
+> PR paid a four-repo pin cascade (regen → push → re-pin vortex CI + three
+> release.yml → omicron pins), and a lagging pin aged into phantom reds
+> (the stale-pin incident). Class 1 now DERIVES the baseline at run time:
+> render the merge-base, assert no doc (apiVersion/kind/namespace/name) was
+> lost — strictly stronger than counts, stateless, cascade-free. Chart-
+> vendored dirs are report-only for losses (chart version bumps legitimately
+> churn docs).
 >
 > 2026-11-14 (ingress retirement): `applications/earendil` + `applications/mellon`
 > rows 4→3 — the bases lost their Ingress (each env overlay authors its own
@@ -358,7 +363,7 @@ any visibility. The lesson itself still bites: `kanatabi/earendil` and
 ```
 bin/next-version.sh minor            # inside any repo: prints next vX.Y.Z
 DRY_RUN=1 GITHUB_REPOSITORY=kanatabi/lumen bin/push-release.sh v1.2.3
-bin/validate-all.sh <path-to-vortex> [--update]
+bin/validate-all.sh <path-to-vortex> [--base <ref>]   # default: origin/main
 bin/diff-render.sh  <path-to-vortex> <base-ref>
 VORTX=<path-to-vortex> bin/set-image-pr.sh --app lumen \
     --image ghcr.io/kanatabi/lumen --tag v9.9.9-test --dry-run
